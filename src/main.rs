@@ -36,7 +36,8 @@ impl GifReader {
 
     fn read_str(&mut self, nb_bytes : usize) -> Result<&str, std::str::Utf8Error> {
         use std::str;
-        let data = &self.buf[self.pos..nb_bytes];
+        let end = self.pos + nb_bytes;
+        let data = &self.buf[self.pos..end];
         self.pos += nb_bytes;
         str::from_utf8(data)
     }
@@ -54,9 +55,16 @@ impl GifReader {
         val
     }
 
-    fn skip(&mut self, nb_bytes : usize) {
+    fn read_slice(&mut self, nb_bytes : usize) -> &[u8] {
+        let end = self.pos + nb_bytes;
+        let val = &self.buf[self.pos..end];
         self.pos += nb_bytes;
+        val
     }
+
+    // fn skip(&mut self, nb_bytes : usize) {
+    //     self.pos += nb_bytes;
+    // }
 
     fn get_pos(&self) -> usize {
         self.pos
@@ -76,7 +84,7 @@ impl GifReader {
     // fn read_u8(&mut self) -> u8 {
     //     let val = self.buf[self.idx];
     //     self.idx += 1;
-        
+
     // }
 }
 // impl<'a> GifReader<'a> {
@@ -125,16 +133,16 @@ impl GifReader {
 //     // fn read_u8(&mut self) -> u8 {
 //     //     let val = self.buf[self.idx];
 //     //     self.idx += 1;
-        
+
 //     // }
 // }
 
 fn main() {
-    let file_data = std::fs::read("./a.gif").unwrap();
+    let file_data = std::fs::read("./z.gif").unwrap();
     if file_data.len() < HEADER_SIZE {
         panic!("Invalid GIF file: too short");
     }
-    let rdr = GifReader::new(file_data);
+    let mut rdr = GifReader::new(file_data);
     let header = parse_header(&mut rdr);
     println!("{}x{} {:?}", header.height, header.width, header.global_color_table);
 
@@ -156,7 +164,7 @@ fn main() {
     }
 }
 
-fn parse_image_descriptor(rdr : &mut GifReader) -> usize {
+fn parse_image_descriptor(rdr : &mut GifReader) {
     let image_left_position = rdr.read_u16();
     let image_top_position = rdr.read_u16();
     let image_width = rdr.read_u16();
@@ -185,11 +193,11 @@ fn parse_image_descriptor(rdr : &mut GifReader) -> usize {
     // TODO Remove
     let mut whole_data : Vec<u8> = vec![];
     loop {
-        if buf.len() <= curr_index {
+        if rdr.bytes_left() <= 0 {
             panic!("Invalid GIF File: Image Descriptor Truncated");
         }
 
-        let sub_block_size = buf[curr_index] as usize;
+        let sub_block_size = rdr.read_u8() as usize;
         if sub_block_size == 0 {
             println!("Aended {}", whole_data.len());
             println!("{:?}", whole_data);
@@ -203,16 +211,13 @@ fn parse_image_descriptor(rdr : &mut GifReader) -> usize {
                 data2.extend(bytes.iter().map(|&i| i));
             }
             println!("{}x{} {:?} - {:?}",
-                image_height, image_width, image_height, data2.len());
-            return curr_index + 1;
+                image_height, image_width, data2, data2.len());
+            return ;
         }
-        if buf.len() <= curr_index + sub_block_size {
+        if rdr.bytes_left() <= sub_block_size {
             panic!("Invalid GIF File: Image Descriptor Truncated");
         }
-        let sub_block_start : usize = curr_index + 1;
-        let sub_block_end : usize = sub_block_start + sub_block_size;
-        whole_data.extend(&buf[sub_block_start..sub_block_end]);
-        curr_index = sub_block_end;
+        whole_data.extend(rdr.read_slice(sub_block_size));
     }
 }
 // fn parse_image_descriptor(buf : &Vec<u8>, idx : usize) -> usize {
