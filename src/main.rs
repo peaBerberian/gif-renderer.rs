@@ -5,27 +5,11 @@ const HEADER_SIZE : usize = 13;
 const IMAGE_DESCRIPTOR_BLOCK_ID : u8 = 0x2C;
 const TRAILER_BLOCK_ID : u8 = 0x3B;
 
-// struct LEReader {
-//     buf : Vec<u8>,
-//     idx : usize,
-// }
-
-// struct GifReader<'a> {
-//     buf : &'a[u8],
-//     pos : usize,
-// }
-// struct GifReader<'a> {
-//     buf : &'a[u8],
-// }
-
-// struct GifReader<T : AsRef<[T]>> {
-//     buf : T,
-//     pos : usize,
-// }
 struct GifReader {
     buf : Vec<u8>,
     pos : usize,
 }
+
 impl GifReader {
     fn new(buf : Vec<u8>) -> GifReader {
         GifReader {
@@ -34,6 +18,9 @@ impl GifReader {
         }
     }
 
+    /// Read the next N bytes as an utf8 string.
+    /// /!\ Perform no bound checking. Will panic if there's less than the
+    /// indicated number of bytes in the buffer.
     fn read_str(&mut self, nb_bytes : usize) -> Result<&str, std::str::Utf8Error> {
         use std::str;
         let end = self.pos + nb_bytes;
@@ -42,6 +29,9 @@ impl GifReader {
         str::from_utf8(data)
     }
 
+    /// Get the next two bytes as an u16.
+    /// /!\ Perform no bound checking. Will panic if there's less than two bytes
+    /// left in the buffer.
     fn read_u16(&mut self) -> u16 {
         let val = self.buf[self.pos] as u16 |
             ((self.buf[self.pos + 1] as u16) << 8);
@@ -49,12 +39,18 @@ impl GifReader {
         val
     }
 
+    /// Get the next byte.
+    /// /!\ Perform no bound checking. Will panic if there's no byte left in
+    /// the buffer.
     fn read_u8(&mut self) -> u8 {
         let val = self.buf[self.pos];
         self.pos += 1;
         val
     }
 
+    /// Return the next N bytes as a slice of u8.
+    /// /!\ Perform no bound checking. Will panic if there's less than the
+    /// indicated number of bytes in the buffer.
     fn read_slice(&mut self, nb_bytes : usize) -> &[u8] {
         let end = self.pos + nb_bytes;
         let val = &self.buf[self.pos..end];
@@ -62,80 +58,16 @@ impl GifReader {
         val
     }
 
-    // fn skip(&mut self, nb_bytes : usize) {
-    //     self.pos += nb_bytes;
-    // }
-
+    /// Get the GifReader's current cursor position
     fn get_pos(&self) -> usize {
         self.pos
     }
 
+    /// Get the remaining amount of bytes to read in the GifReader's buffer.
     fn bytes_left(&self) -> usize {
         self.buf.len() - self.pos
     }
-
-    // fn read_u16(&mut self) -> u16 {
-    //     let val = self.buf[self.idx] as u16 |
-    //         ((self.buf[self.idx + 1] as u16) << 8);
-    //     self.idx += 2;
-    //     val
-    // }
-
-    // fn read_u8(&mut self) -> u8 {
-    //     let val = self.buf[self.idx];
-    //     self.idx += 1;
-
-    // }
 }
-// impl<'a> GifReader<'a> {
-//     fn new(vec : Vec<u8>) -> GifReader<'a> {
-//         let buf = &vec;
-//         GifReader {
-//             buf,
-//         }
-//     }
-
-//     fn read_str(&mut self, nb_bytes : usize) -> Result<&str, std::str::Utf8Error> {
-//         use std::str;
-//         let data = &self.buf[0..nb_bytes];
-//         self.buf = &self.buf[nb_bytes..];
-//         str::from_utf8(data)
-//     }
-
-//     fn read_u16(&mut self) -> u16 {
-//         let val = self.buf[0] as u16 |
-//             ((self.buf[0 + 1] as u16) << 8);
-//         self.buf = &self.buf[2..];
-//         val
-//     }
-
-//     fn read_u8(&mut self) -> u8 {
-//         let val = self.buf[0];
-//         self.buf = &self.buf[1..];
-//         val
-//     }
-
-//     fn skip(&mut self, nb_bytes : usize) {
-//         self.buf = &self.buf[nb_bytes..];
-//     }
-
-//     fn bytes_left(&self) -> usize {
-//         self.buf.len()
-//     }
-
-//     // fn read_u16(&mut self) -> u16 {
-//     //     let val = self.buf[self.idx] as u16 |
-//     //         ((self.buf[self.idx + 1] as u16) << 8);
-//     //     self.idx += 2;
-//     //     val
-//     // }
-
-//     // fn read_u8(&mut self) -> u8 {
-//     //     let val = self.buf[self.idx];
-//     //     self.idx += 1;
-
-//     // }
-// }
 
 fn main() {
     let file_data = std::fs::read("./z.gif").unwrap();
@@ -144,7 +76,7 @@ fn main() {
     }
     let mut rdr = GifReader::new(file_data);
     let header = parse_header(&mut rdr);
-    println!("{}x{} {:?}", header.height, header.width, header.global_color_table);
+    println!("resolution:{}x{} GCT:{:?}", header.height, header.width, header.global_color_table);
 
     while rdr.bytes_left() > 0 {
         match rdr.read_u8() {
@@ -220,69 +152,6 @@ fn parse_image_descriptor(rdr : &mut GifReader) {
         whole_data.extend(rdr.read_slice(sub_block_size));
     }
 }
-// fn parse_image_descriptor(buf : &Vec<u8>, idx : usize) -> usize {
-//     let image_left_position = le_buf_to_u16(buf, idx + 1);
-//     let image_top_position = le_buf_to_u16(buf, idx + 3);
-//     let image_width = le_buf_to_u16(buf, idx + 5);
-//     let image_height = le_buf_to_u16(buf, idx + 7);
-//     let field = buf[idx + 9];
-//     println!("{}, {}, {}, {}",
-//         image_left_position, image_top_position, image_width, image_height);
-
-//     let has_local_color_table = field & 0x80 != 0;
-//     let has_interlacing = field & 0x40 != 0;
-//     let is_sorted = field & 0x20 != 0;
-//     let _reserved_1 = field & 0x10;
-//     let _reserved_2 = field & 0x08;
-//     let nb_entries : usize = 1 << ((field & 0x07) + 1);
-
-//     let (code_size_idx, lct) = if has_local_color_table {
-//         (
-//             idx + 10 + (nb_entries * 3),
-//             Some(parse_color_table(buf, nb_entries))
-//         )
-//     } else { (idx + 10, None) };
-
-//     println!("lt{}, i{}, s{}, {} {:?} {} ",
-//         has_local_color_table, has_interlacing, is_sorted, nb_entries, lct, code_size_idx);
-
-//     let initial_code_size = buf[code_size_idx];
-//     println!("aaa {} {}", initial_code_size, code_size_idx + 1);
-//     let mut curr_index = code_size_idx + 1;
-
-//     // TODO Remove
-//     let mut whole_data : Vec<u8> = vec![];
-//     loop {
-//         if buf.len() <= curr_index {
-//             panic!("Invalid GIF File: Image Descriptor Truncated");
-//         }
-
-//         let sub_block_size = buf[curr_index] as usize;
-//         if sub_block_size == 0 {
-//             println!("Aended {}", whole_data.len());
-//             println!("{:?}", whole_data);
-//             let mut decoder = Decoder::new(initial_code_size);
-//             let mut compressed = &whole_data[..];
-//             let mut data2 = vec![];
-//             while compressed.len() > 0 {
-//                 let (start, bytes) = decoder.decode_bytes(&whole_data).unwrap();
-//                 compressed = &compressed[start..];
-//                 println!("OKX{:?}", bytes);
-//                 data2.extend(bytes.iter().map(|&i| i));
-//             }
-//             println!("{}x{} {:?} - {:?}",
-//                 image_height, image_width, image_height, data2.len());
-//             return curr_index + 1;
-//         }
-//         if buf.len() <= curr_index + sub_block_size {
-//             panic!("Invalid GIF File: Image Descriptor Truncated");
-//         }
-//         let sub_block_start : usize = curr_index + 1;
-//         let sub_block_end : usize = sub_block_start + sub_block_size;
-//         whole_data.extend(&buf[sub_block_start..sub_block_end]);
-//         curr_index = sub_block_end;
-//     }
-// }
 
 #[derive(Debug)]
 struct GifHeader {
@@ -294,17 +163,6 @@ struct GifHeader {
     pixel_aspect_ratio : u8,
     global_color_table : Option<Vec<RGB>>,
 }
-// #[derive(Debug)]
-// struct GifHeader {
-//     width : u16,
-//     height : u16,
-//     nb_color_resolution_bits : u8,
-//     is_table_sorted : bool,
-//     background_color_index : u8,
-//     pixel_aspect_ratio : u8,
-//     global_color_table : Option<Vec<RGB>>,
-//     first_block_index : usize,
-// }
 
 #[derive(Debug, Clone)]
 struct RGB {
@@ -314,23 +172,6 @@ struct RGB {
 }
 
 // TODO use C repr to parse it more rapidly?
-// fn parse_color_table(buf : &Vec<u8>, nb_entries : usize) -> Vec<RGB> {
-//     let ct_size : usize = nb_entries * 3;
-//     if buf.len() < HEADER_SIZE + ct_size  {
-//         panic!("Invalid GIF file: truncated color table");
-//     }
-//     let mut ct : Vec<RGB> = vec![RGB { r: 0, g: 0, b: 0}; nb_entries as usize];
-//     let mut curr_index = HEADER_SIZE;
-//     for curr_elt_idx in 0..(nb_entries) {
-//         ct[curr_elt_idx as usize] = RGB {
-//             r: buf[curr_index],
-//             g: buf[curr_index + 1],
-//             b: buf[curr_index + 2],
-//         };
-//         curr_index += 3;
-//     }
-//     ct
-// }
 fn parse_color_table(rdr : &mut GifReader, nb_entries : usize) -> Vec<RGB> {
     let ct_size : usize = nb_entries * 3;
     if rdr.bytes_left() < ct_size  {
@@ -390,85 +231,6 @@ fn parse_header(rdr : &mut GifReader) -> GifHeader {
         global_color_table: gct,
     }
 }
-// fn parse_header(buf : &Vec<u8>) -> GifHeader {
-//     use std::str;
-
-//     let id_tag = &buf[0..3];
-//     match str::from_utf8(id_tag) {
-//         Err(e) => panic!("Invalid GIF file:
-//             Impossible to read the header, obtained: {}.", e),
-//         Ok(x) if x != "GIF" => panic!("Invalid GIF file: Missing GIF header."),
-//         _ => {}
-//     }
-
-//     let version = &buf[3..6];
-//     match str::from_utf8(version) {
-//         Err(x) => panic!("Impossible to parse the version: {}.", x),
-//         Ok(v) if v != "89a" && v != "87a" => panic!("Unmanaged version: {}", v),
-//         _ => {}
-//     }
-
-//     let width = le_buf_to_u16(buf, 6);
-//     let height = le_buf_to_u16(buf, 8);
-//     let field = buf[10];
-//     let has_global_color_table = field & 0x80 != 0;
-//     let nb_color_resolution_bits = ((field & 0x70) >> 4) + 1;
-//     let is_table_sorted = field & 0x08 != 0;
-//     println!("nba {}", field & 0x07);
-//     let nb_entries : usize = 1 << ((field & 0x07) + 1);
-//     let background_color_index = buf[11];
-//     let pixel_aspect_ratio = buf[12];
-//     println!("nb {}", nb_entries);
-//     let (first_block_index, gct) = if has_global_color_table {
-//         (
-//             HEADER_SIZE + (nb_entries * 3),
-//             Some(parse_color_table(buf, nb_entries))
-//         )
-//     } else { (HEADER_SIZE, None) };
-
-//     GifHeader {
-//         width,
-//         height,
-//         nb_color_resolution_bits,
-//         is_table_sorted,
-//         background_color_index,
-//         pixel_aspect_ratio,
-//         global_color_table: gct,
-//         first_block_index,
-//     }
-// }
-
-// use std::collections::HashMap;
-
-// #[derive(Debug)]
-// struct DecodingDict {
-//     table: HashMap<u16, Vec<u8>>,
-//     buffer: Vec<u8>,
-// }
-
-// fn get_dict(initial_code_size : u16) {
-//     let mut dict : Vec = HashMap.new();
-//     let last_code = 1u16 << initial_code_size;
-//     for i in 0..initial_code_size {
-//         dict
-//     }
-// }
-
-/// Convert two bytes from a buffer in little-endian to an u16
-/// /!\ Perform no bound checking. Will panic if the length of the vector minus
-/// the index given equals less than two.
-// fn le_buf_to_u16(buf : &Vec<u8>,
-//                  idx : usize) -> u16 {
-//     buf[idx] as u16 + ((buf[idx + 1] as u16) << 8)
-// }
-
-// fn _le_buf_to_u32(buf : &Vec<u8>,
-//                  idx : usize) -> u32 {
-//     buf[idx] as u32 +
-//         ((buf[idx + 1] as u32) << 8) +
-//         ((buf[idx + 1] as u32) << 16) +
-//         ((buf[idx + 1] as u32) << 24)
-// }
 
 /// Alias for a LZW code point
 type Code = u16;
@@ -709,37 +471,3 @@ impl Decoder {
         })
     }
 }
-
-/// Convert two bytes from a buffer in little-endian to an u16
-fn _le_buf_to_u16(buf : &[u8]) -> u16 {
-    buf[0] as u16 | ((buf[1] as u16) << 8)
-}
-
-fn __le_buf_to_u32(buf : &[u8]) -> u32 {
-    buf[0] as u32 |
-        ((buf[1] as u32) << 8) |
-        ((buf[2] as u32) << 16) |
-        ((buf[3] as u32) << 24)
-}
-
-// /// Convert two bytes from a buffer in little-endian to an u16
-// fn _le_buf_to_u16(buf : &[u8]) -> u16 {
-//      match buf.len() {
-//         0 => 0,
-//         1 => buf[0] as u16,
-//         _ => buf[0] as u16 + ((buf[1] as u16) << 8),
-//      }
-// }
-
-// fn _le_buf_to_u32(buf : &[u8]) -> u32 {
-//      match buf.len() {
-//         0..=2 => le_buf_to_u16(buf) as u32,
-//         3 => buf[0] as u32 +
-//              ((buf[1] as u32) << 8) +
-//              ((buf[2] as u32) << 16),
-//         _ => buf[0] as u32 +
-//              ((buf[1] as u32) << 8) +
-//              ((buf[2] as u32) << 16) +
-//              ((buf[3] as u32) << 24),
-//      }
-// }
