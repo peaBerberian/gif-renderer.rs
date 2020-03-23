@@ -72,19 +72,7 @@ impl GifReader {
 
 fn main() {
 
-    // Open the file
-    use std::fs::File;
-    use gif::SetParameter;
-    let mut decoder = gif::Decoder::new(File::open("e2.gif").unwrap());
-    // Configure the decoder such that it will expand the image to RGBA.
-    decoder.set(gif::ColorOutput::RGBA);
-    // Read the file header
-    let mut decoder = decoder.read_info().unwrap();
-    while let Some(frame) = decoder.read_next_frame().unwrap() {
-        println!("{:?}", frame);
-    }
-
-    let file_data = std::fs::read("./l.gif").unwrap();
+    let file_data = std::fs::read("./a.gif").unwrap();
     if file_data.len() < HEADER_SIZE {
         panic!("Invalid GIF file: too short");
     }
@@ -150,20 +138,21 @@ fn parse_image_descriptor(rdr : &mut GifReader, gct : Option<Vec<RGB>>) {
             println!("sub block: {}x{}", image_height, image_width);
             println!("{:?}", whole_data);
 
-            let data2 = lzw_decoder(whole_data, initial_code_size);
+            let data2 = lzw_decoder(&whole_data, initial_code_size);
 
             let gct_unw = gct.unwrap();
-            let mut buffer: Vec<u32> = vec![0; image_width as usize *
-                                                 image_height as usize];
-            let max = image_width * image_height - 1;
-            for i in 0..3 {
-                println!("{} {}", i, max);
-                let elt = data2[i as usize];
+            let mut buffer: Vec<u32> = Vec::with_capacity(image_width as usize *
+                                                          image_height as usize);
+            println!("{:?}", &data2);
+            let data2_len = data2.len();
+            for elt in data2 {
                 let rgb = &gct_unw[elt as usize];
-                let val = ((rgb.r as u32) << 16) + ((rgb.g as u32) << 8) + rgb.r as u32;
-                if (i as usize) < buffer.len() {
-                    buffer[i as usize] = val;
-                }
+                let val = ((rgb.r as u32) << 16) + ((rgb.g as u32) << 8) + ((rgb.b as u32) << 0);
+                buffer.push(val);
+            }
+            // println!(data2_len, buffer.capacity())
+            for _ in data2_len..buffer.capacity() {
+                buffer.push(0);
             }
 
             let mut window = Window::new(
@@ -275,7 +264,7 @@ enum DictionaryValue {
     Clear,
     Stop,
     Repeat,
-    Value(u8),
+    Value(Vec<u8>),
 }
 
 #[derive(Debug)]
@@ -299,28 +288,28 @@ impl Dictionary {
 
     fn clear(&mut self) {
         self.table.clear();
-        let initial_table_size = (1 << self.min_code_size) + 2;
+        println!("HOP {}", self.min_code_size);
+        let initial_table_size : u16 = (1 << self.min_code_size as u16) + 2;
         for i in 0..(initial_table_size - 2) {
-            self.table.push(DictionaryValue::Value(i));
+            self.table.push(DictionaryValue::Value(vec![i as u8]));
         }
         self.table.push(DictionaryValue::Clear);
         self.table.push(DictionaryValue::Stop);
-        println!("CLEARED {:?}", self.table);
         self.next_code = (1u16 << self.min_code_size) + 2;
     }
 
-    fn get_code(&self, code : u16) -> DictionaryValue {
+    fn get_code(&self, code : u16) -> &DictionaryValue {
         let code = code as usize;
         if self.table.len() > code {
-            self.table[code].clone()
+            &self.table[code]
         } else if code == self.next_code as usize {
-            DictionaryValue::Repeat
+            &DictionaryValue::Repeat
         } else {
-            DictionaryValue::None
+            &DictionaryValue::None
         }
     }
 
-    fn push_val(&mut self, val : u8) {
+    fn push_val(&mut self, val : Vec<u8>) {
         self.table.push(DictionaryValue::Value(val));
     }
 }
@@ -329,7 +318,7 @@ impl Dictionary {
 /// Shamefully mostly-taken from the `gif` crate.
 /// Not that I don't understand it now!
 #[derive(Debug)]
-struct LsbReader<'a> {
+struct LsbReader {
     /// Current number or bits waiting to be read
     bits: u8,
 
@@ -337,9 +326,9 @@ struct LsbReader<'a> {
     acc: u32,
 }
 
-impl<'a> LsbReader<'a> {
+impl LsbReader {
     /// Create a new LsbReader
-    fn new() -> LsbReader<'a> {
+    fn new() -> LsbReader {
         LsbReader {
             bits: 0,
             acc: 0,
@@ -350,7 +339,7 @@ impl<'a> LsbReader<'a> {
     /// Returns both the number or bytes read from the buffer and the read u16
     /// value.
     /// Warning: `n` cannot be superior to 16.
-    fn read_bits(&mut self, buf: &[u8], n: u8) -> (usize, Option<u16>) {
+    fn read_bits(&mut self, mut buf: &[u8], n: u8) -> (usize, Option<u16>) {
         if n > 16 {
             // This is a logic error the program should have prevented this
             // Ideally we would used bounded a integer value instead of u8
@@ -383,7 +372,7 @@ impl<'a> LsbReader<'a> {
 }
 
 fn lzw_decoder(buf : &[u8], min_code_size : u8) -> Vec<u8> {
-    let mut previous : &[u8] = &[];
+    let mut previous : Vec<u8> = vec![];
     let mut bit_reader = LsbReader::new();
     let mut dict  = Dictionary::new(min_code_size);
     let mut decoded_buf : Vec<u8> = vec![];
@@ -393,17 +382,17 @@ fn lzw_decoder(buf : &[u8], min_code_size : u8) -> Vec<u8> {
     loop {
         match bit_reader.read_bits(&buf[current_offset..], current_code_size) {
             (_, None) => {
-                return vec![]
+                return decoded_buf;
             },
             (consumed, Some(val)) => {
                 current_offset += consumed;
-                println!("VAL: {}", val);
+                println!("Code encountered: {}", val);
                 match dict.get_code(val) {
                     DictionaryValue::Clear => {
                         println!("!! CLEAR");
                         dict.clear();
                         current_code_size = min_code_size + 1;
-                        previous = &[];
+                        previous = vec![];
                     },
                     DictionaryValue::Stop => {
                         println!("!! Stop");
@@ -411,16 +400,29 @@ fn lzw_decoder(buf : &[u8], min_code_size : u8) -> Vec<u8> {
                     },
                     DictionaryValue::None => {
                         println!("!! None");
-                        panic!("Impossible to decode. Invalid value: {}", val);
+                        panic!("Impossible to decode. Invalid value: {} {:?}", val, dict);
                     },
                     DictionaryValue::Repeat => {
                         println!("!! REPEAT");
                         // TODO
-                        panic!("Impossible to decode. Didn't do repeats for now!");
+                        // panic!("Impossible to decode. Didn't do repeats for now!");
+                        return decoded_buf;
                     },
                     DictionaryValue::Value(val) => {
-                        println!("!! val {}", val);
-
+                        println!("Corresponding value(s): {:?}", val);
+                        decoded_buf.extend(val);
+                        if previous.len() != 0 {
+                            previous.push(val[0]);
+                            let val_cloned = val.clone();
+                            println!("New code pushed: {} = {:?}", dict.table.len(), &previous);
+                            dict.push_val(previous.clone());
+                            if dict.table.len() == (1 << current_code_size as usize) {
+                                current_code_size += 1;
+                            }
+                            previous = val_cloned;
+                        } else {
+                            previous.push(val[0]);
+                        }
                     }
                 }
             }
