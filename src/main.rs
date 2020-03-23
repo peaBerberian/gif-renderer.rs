@@ -72,7 +72,7 @@ impl GifReader {
 
 fn main() {
 
-    let file_data = std::fs::read("./a.gif").unwrap();
+    let file_data = std::fs::read("./b.gif").unwrap();
     if file_data.len() < HEADER_SIZE {
         panic!("Invalid GIF file: too short");
     }
@@ -140,13 +140,17 @@ fn parse_image_descriptor(rdr : &mut GifReader, gct : Option<Vec<RGB>>) {
 
             let data2 = lzw_decoder(&whole_data, initial_code_size);
 
-            let gct_unw = gct.unwrap();
+            let current_color_table = if let Some(c) = lct {
+                c
+            } else {
+                gct.unwrap()
+            };
             let mut buffer: Vec<u32> = Vec::with_capacity(image_width as usize *
                                                           image_height as usize);
             println!("{:?}", &data2);
             let data2_len = data2.len();
             for elt in data2 {
-                let rgb = &gct_unw[elt as usize];
+                let rgb = &current_color_table[elt as usize];
                 let val = ((rgb.r as u32) << 16) + ((rgb.g as u32) << 8) + ((rgb.b as u32) << 0);
                 buffer.push(val);
             }
@@ -288,7 +292,6 @@ impl Dictionary {
 
     fn clear(&mut self) {
         self.table.clear();
-        println!("HOP {}", self.min_code_size);
         let initial_table_size : u16 = (1 << self.min_code_size as u16) + 2;
         for i in 0..(initial_table_size - 2) {
             self.table.push(DictionaryValue::Value(vec![i as u8]));
@@ -302,7 +305,7 @@ impl Dictionary {
         let code = code as usize;
         if self.table.len() > code {
             &self.table[code]
-        } else if code == self.next_code as usize {
+        } else if code == self.table.len() {
             &DictionaryValue::Repeat
         } else {
             &DictionaryValue::None
@@ -372,7 +375,7 @@ impl LsbReader {
 }
 
 fn lzw_decoder(buf : &[u8], min_code_size : u8) -> Vec<u8> {
-    let mut previous : Vec<u8> = vec![];
+    let mut current_vec : Vec<u8> = vec![];
     let mut bit_reader = LsbReader::new();
     let mut dict  = Dictionary::new(min_code_size);
     let mut decoded_buf : Vec<u8> = vec![];
@@ -392,7 +395,7 @@ fn lzw_decoder(buf : &[u8], min_code_size : u8) -> Vec<u8> {
                         println!("!! CLEAR");
                         dict.clear();
                         current_code_size = min_code_size + 1;
-                        previous = vec![];
+                        current_vec = vec![];
                     },
                     DictionaryValue::Stop => {
                         println!("!! Stop");
@@ -404,24 +407,32 @@ fn lzw_decoder(buf : &[u8], min_code_size : u8) -> Vec<u8> {
                     },
                     DictionaryValue::Repeat => {
                         println!("!! REPEAT");
-                        // TODO
-                        // panic!("Impossible to decode. Didn't do repeats for now!");
-                        return decoded_buf;
+                        if current_vec.len() == 0 {
+                            panic!("Impossible to decode. Invalid value: {} {:?}", val, dict);
+                        }
+                        let first_val = current_vec[0];
+                        current_vec.push(first_val);
+                        decoded_buf.extend(current_vec.clone());
+                        println!("New code pushed: {} = {:?}", dict.table.len(), &current_vec);
+                        dict.push_val(current_vec.clone());
+                        if dict.table.len() == (1 << current_code_size as usize) {
+                            current_code_size += 1;
+                        }
                     },
                     DictionaryValue::Value(val) => {
                         println!("Corresponding value(s): {:?}", val);
                         decoded_buf.extend(val);
-                        if previous.len() != 0 {
-                            previous.push(val[0]);
+                        if current_vec.len() != 0 { // Only empty at the beginning or when cleared
+                            current_vec.push(val[0]);
                             let val_cloned = val.clone();
-                            println!("New code pushed: {} = {:?}", dict.table.len(), &previous);
-                            dict.push_val(previous.clone());
+                            println!("New code pushed: {} = {:?}", dict.table.len(), &current_vec);
+                            dict.push_val(current_vec.clone());
                             if dict.table.len() == (1 << current_code_size as usize) {
                                 current_code_size += 1;
                             }
-                            previous = val_cloned;
+                            current_vec = val_cloned;
                         } else {
-                            previous.push(val[0]);
+                            current_vec.push(val[0]);
                         }
                     }
                 }
