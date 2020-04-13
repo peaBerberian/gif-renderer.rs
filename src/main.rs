@@ -1,195 +1,468 @@
-use minifb::{Key, Window, WindowOptions};
+mod decoder;
+mod gif_reader;
+mod render;
 
+use gif_reader::GifReader;
+use decoder::LzwDecoder;
+
+/// Minimum size a GIF buffer should have to be valid.
 const HEADER_SIZE : usize = 13;
 
+/// GIF block ID for the "Image Descriptor".
 const IMAGE_DESCRIPTOR_BLOCK_ID : u8 = 0x2C;
+
+/// GIF block ID for the "Trailer".
 const TRAILER_BLOCK_ID : u8 = 0x3B;
+
+/// GIF block ID for the "Extension Introducer".
 const EXTENSION_INTRODUCER_ID : u8 = 0x21;
 
-struct GifReader {
-    buf : Vec<u8>,
-    pos : usize,
-}
+/// GIF block ID for the "Graphic Control Extension".
+const GRAPHIC_CONTROL_EXTENSION_LABEL : u8 = 0xF9;
 
-impl GifReader {
-    fn new(buf : Vec<u8>) -> GifReader {
-        GifReader {
-            buf,
-            pos: 0,
-        }
-    }
+/// GIF block ID for an "Application Extension".
+const APPLICATION_EXTENSION_LABEL : u8 = 0xFF;
 
-    /// Read the next N bytes as an utf8 string.
-    /// /!\ Perform no bound checking. Will panic if there's less than the
-    /// indicated number of bytes in the buffer.
-    fn read_str(&mut self, nb_bytes : usize) -> Result<&str, std::str::Utf8Error> {
-        use std::str;
-        let end = self.pos + nb_bytes;
-        let data = &self.buf[self.pos..end];
-        self.pos += nb_bytes;
-        str::from_utf8(data)
-    }
+/// GIF block ID for a "Comment Extension".
+const COMMENT_EXTENSION_LABEL : u8 = 0xFE;
 
-    /// Get the next two bytes as an u16.
-    /// /!\ Perform no bound checking. Will panic if there's less than two bytes
-    /// left in the buffer.
-    fn read_u16(&mut self) -> u16 {
-        let val = self.buf[self.pos] as u16 |
-            ((self.buf[self.pos + 1] as u16) << 8);
-        self.pos += 2;
-        val
-    }
+/// GIF block ID for a "Plain Text Extension".
+const PLAIN_TEXT_EXTENSION_LABEL : u8 = 0x01;
 
-    /// Get the next byte.
-    /// /!\ Perform no bound checking. Will panic if there's no byte left in
-    /// the buffer.
-    fn read_u8(&mut self) -> u8 {
-        let val = self.buf[self.pos];
-        self.pos += 1;
-        val
-    }
-
-    /// Return the next N bytes as a slice of u8.
-    /// /!\ Perform no bound checking. Will panic if there's less than the
-    /// indicated number of bytes in the buffer.
-    fn read_slice(&mut self, nb_bytes : usize) -> &[u8] {
-        let end = self.pos + nb_bytes;
-        let val = &self.buf[self.pos..end];
-        self.pos += nb_bytes;
-        val
-    }
-
-    /// Get the GifReader's current cursor position
-    fn get_pos(&self) -> usize {
-        self.pos
-    }
-
-    /// Get the remaining amount of bytes to read in the GifReader's buffer.
-    fn bytes_left(&self) -> usize {
-        self.buf.len() - self.pos
-    }
-}
+/// Background color used when none is defined.
+const DEFAULT_BACKGROUND_COLOR : u32 = 0xFFFFFF;
 
 fn main() {
-
-    // let file_data = std::fs::read("./b.gif").unwrap();
-    let file_data = std::fs::read("./kermit.gif").unwrap();
+    let args: Vec<String> = std::env::args().collect();
+    if args.len() < 2 {
+        panic!("Missing file argument");
+    }
+    let file_data = std::fs::read(&args[1]).unwrap();
     if file_data.len() < HEADER_SIZE {
         panic!("Invalid GIF file: too short");
     }
+
     let mut rdr = GifReader::new(file_data);
+
     let header = parse_header(&mut rdr);
-    println!("resolution:{}x{}", header.width, header.height);
-    // println!("GCT: {:?}", header.global_color_table);
+
+    let (background_color, global_color_table) =
+        if let Some(gct) = &header.global_color_table {
+            let index = header.background_color_index as usize;
+            if gct.len() <= index {
+                panic!("Invalid GIF File: Invalid background color index: {}", index);
+            }
+            (Some(&gct[index]), Some(gct.as_slice()))
+        } else {
+            (None, None)
+        };
+
+    // Last graphic extension encountered. Will be needed when an Image Descriptor
+    // is encountered.
+    let mut last_graphic_ext : Option<GraphicControlExtension> = None;
+
+    // Background for the next frame encountered. Its content depends on the
+    // "disposal method" of the next frame encountered.
+    let mut next_frame_base_buffer : Option<Vec<u32>> = None;
+
+    // Number of time the GIF should be looped on according to the NETSCAPE2.0
+    // Application extension. A value of `Some(0)` indicates that it should be looped
+    // forever.
+    let mut nb_loop : Option<u16> = None;
+
+    // Store every frames and the corresponding delays to the next frame, if one.
+    let mut frames : Vec<(Vec<u32>, Option<u16>)> = vec![];
 
     while rdr.bytes_left() > 0 {
         match rdr.read_u8() {
             IMAGE_DESCRIPTOR_BLOCK_ID => {
-                println!("IT'S A BLOCK {}", rdr.get_pos());
-                parse_image_descriptor(&mut rdr, header.global_color_table);
-                return;
+                let (delay, transparent_color_index) = match &last_graphic_ext {
+                    Some(e) => (Some(e.delay), e.transparent_color_index),
+                    None => (None, None)
+                };
+
+                // The "RestoreToPrevious" disposal method force us to keep the current base
+                // buffer for the frame coming after that one.
+                use DisposalMethod::{*};
+                let cloned_image_background = match last_graphic_ext {
+                    Some(GraphicControlExtension { disposal_method: RestoreToPrevious, .. }) =>
+                        next_frame_base_buffer.clone(),
+                    _ => None
+                };
+
+                let block = construct_next_frame(&mut rdr,
+                                                 next_frame_base_buffer,
+                                                 header.height,
+                                                 header.width,
+                                                 &background_color,
+                                                 &global_color_table,
+                                                 &transparent_color_index);
+
+                // Obtain the base buffer for the next frame according to the current disposal
+                // method
+                next_frame_base_buffer = match last_graphic_ext {
+                    Some(GraphicControlExtension { disposal_method: DoNotDispose, ..  }) => {
+                        Some(block.clone())
+                    },
+                    Some(GraphicControlExtension { disposal_method: RestoreToBackgroundColor, ..  }) =>
+                        None,
+                    _ => cloned_image_background,
+                };
+                frames.push((block, delay));
             }
             TRAILER_BLOCK_ID => {
-                println!("IT'S A TRAILER {}", rdr.get_pos());
-                // return ();
+                render::render_image(&frames, nb_loop, header.width as usize, header.height as usize);
             }
             EXTENSION_INTRODUCER_ID => {
-                parse_extension_introducer(&mut rdr);
+                match rdr.read_u8() {
+                    GRAPHIC_CONTROL_EXTENSION_LABEL => {
+                        last_graphic_ext = Some(parse_graphic_control_extension(&mut rdr));
+                    }
+                    APPLICATION_EXTENSION_LABEL => {
+                        // Only NETSCAPE2.0 is parsed for now as looping is an essential feature
+                        // (And I just don't want to set it to infinite by default)
+                        nb_loop = match parse_application_extension(&mut rdr).extension {
+                            ApplicationExtensionValue::NetscapeLooping(x) => Some(x),
+                            ApplicationExtensionValue::NotKnown => None,
+                        };
+                    }
+                    COMMENT_EXTENSION_LABEL => {
+                        // We don't care about comments
+                        skip_sub_blocks(&mut rdr);
+                        if rdr.read_u8() != 0x00 /* block terminator */ {
+                            panic!("Invalid GIF File: A cooment extension does not \
+                               terminate with a block terminator");
+                        }
+                    }
+                    PLAIN_TEXT_EXTENSION_LABEL => {
+                        skip_plain_text_extension(&mut rdr);
+                    }
+                    _ => {
+                        panic!("Invalid GIF File: unknown extension");
+                    }
+                }
             }
-            x => {
-                println!("KEZAKO {} L{}", x, rdr.get_pos());
-            }
+            x => { panic!("Unrecognized code {} at line {}", x, rdr.get_pos()); }
         }
     }
 }
 
-fn parse_extension_introducer(rdr : &mut GifReader) {
-    match rdr.read_u8() {
-        // Graphic Control Label
-        0xF9 => {
+enum ApplicationExtensionValue {
+    /// Looping value from the NETSCAPE2.0 extension.
+    /// 0 means infinite looping, any other value would be the number of time
+    /// the GIF image needs to be looped (played back from the beginning).
+    NetscapeLooping(u16),
+    NotKnown,
+}
+
+struct ApplicationExtension {
+    _app_name : String,
+    _app_auth_code : (u8, u8, u8),
+    extension : ApplicationExtensionValue,
+}
+
+/// Allows to skip sub-blocks when reached. You might want to do that when
+/// reaching a part of the GIF buffer containing sub-blocks you don't care for
+/// (e.g. comments).
+fn skip_sub_blocks(rdr : &mut GifReader) {
+    if rdr.bytes_left() == 0 {
+        panic!("Invalid GIF File: Invalid sub-block data");
+    }
+    loop {
+        let size_of_block = rdr.read_u8() as usize;
+        if size_of_block == 0 {
+            return;
         }
-        _ => {
+        if rdr.bytes_left() <= size_of_block {
+            panic!("Invalid GIF File: Invalid sub-block data");
         }
+        rdr.skip_bytes(size_of_block);
     }
 }
 
-fn parse_image_descriptor(rdr : &mut GifReader, gct : Option<Vec<RGB>>) {
-    let image_left_position = rdr.read_u16();
-    let image_top_position = rdr.read_u16();
-    let image_width = rdr.read_u16();
-    let image_height = rdr.read_u16();
+/// The plain text extention is a 89a GIF extension allowing to render text in a
+/// GIF image. This feature seems to be very rarely used, we can safely ignore
+/// it for now.
+/// TODO?
+fn skip_plain_text_extension(rdr : &mut GifReader) {
+    if rdr.read_u8() != 12 || rdr.bytes_left() <= 12 {
+        panic!("Invalid GIF File: Plain text extension should have a length of 12.");
+    }
+    rdr.skip_bytes(12); // Skip whole plain text header
+    skip_sub_blocks(rdr);
+}
+
+fn parse_application_extension(rdr : &mut GifReader) -> ApplicationExtension {
+    let size_until_app_data = rdr.read_u8() as usize;
+
+    if size_until_app_data != 11 || rdr.bytes_left() <= 11 {
+        panic!("Invalid GIF File: Application Extension has an invalid length");
+    }
+    let _app_name = match rdr.read_str(8) {
+        Err(e) => panic!("Invalid GIF file:
+            Impossible to read the application name: {}", e),
+        Ok(x) => x
+    };
+    let _app_auth_code = (rdr.read_u8(), rdr.read_u8(), rdr.read_u8());
+
+    let mut data_len = rdr.read_u8() as usize;
+    if data_len == 0 {
+        return ApplicationExtension {
+            _app_name,
+            _app_auth_code,
+            extension: ApplicationExtensionValue::NotKnown,
+        };
+    }
+    if rdr.bytes_left() <= data_len {
+        panic!("Invalid GIF File: Application Extension truncated");
+    }
+
+    let mut ext : ApplicationExtensionValue = ApplicationExtensionValue::NotKnown;
+
+    if _app_name == "NETSCAPE" &&
+       _app_auth_code == (50, 46, 48)
+    {
+        let mut cur_offset = 0;
+        let sub_block_id = rdr.read_u8();
+        if data_len != 0x03 || sub_block_id != 0x01 {
+            cur_offset += 1;
+        } else {
+            let loop_count = rdr.read_u16();
+            ext = ApplicationExtensionValue::NetscapeLooping(loop_count);
+            cur_offset += 3;
+        }
+        if data_len < cur_offset {
+            panic!("Invalid GIF File: Application Extension truncated");
+        }
+        data_len -= cur_offset;
+    }
+
+    // Skip all remaining data blocks
+    loop {
+        let bytes_left = rdr.bytes_left();
+        if bytes_left < data_len {
+            panic!("Invalid GIF File: Application Extension truncated 1");
+        }
+        if bytes_left == 0 || data_len == 0 {
+            break;
+        }
+        rdr.skip_bytes(data_len - 1);
+        data_len = rdr.read_u8() as usize;
+    }
+    if rdr.bytes_left() == 0 || rdr.read_u8() != 0x00 /* block terminator */ {
+        panic!("Invalid GIF File: Application Extension truncated");
+    }
+
+    ApplicationExtension {
+        _app_name,
+        _app_auth_code,
+        extension: ext,
+    }
+}
+
+/// The available value for the `disposal_method` parsed from a graphic control
+/// extension.
+#[derive(Debug)]
+enum DisposalMethod {
+    /// The decoder is not required to take any action.
+    NoDisposalSpecified,
+
+    /// The graphic is to be left in place.
+    DoNotDispose,
+
+    /// The area used by the graphic must be restored to the background color.
+    RestoreToBackgroundColor,
+
+    /// The decoder is required to restore the area overwritten by the graphic
+    /// with what was there prior to rendering the graphic.
+    RestoreToPrevious,
+}
+
+/// Value of a parsed Graphic Control Extension from a GIF buffer
+#[derive(Debug)]
+struct GraphicControlExtension {
+    /// Indicates the way in which the graphic is to be treated after being
+    /// displayed.
+    disposal_method: DisposalMethod,
+
+    /// If set to `true`, processing will continue when user input is entered.
+    /// The nature of the User input is determined by the application (Carriage
+    /// Return, Mouse Button Click, etc.).
+    /// When a Delay Time is used and the User Input Flag is set, processing
+    /// will continue when user input is received or when the delay time
+    /// expires, whichever occurs first.
+    user_input : bool,
+
+    /// The Transparency Index is such that when encountered, the corresponding
+    /// pixel of the display device is not modified and processing goes on to
+    /// the next pixel. The index is present if and only if the Transparency
+    /// Flag is set to 1.
+    transparent_color_index : Option<u8>,
+
+    /// If not 0, this field specifies the number of hundredths (1/100) of a
+    /// second to wait before continuing with the processing of the Data Stream.
+    /// The clock starts ticking immediately after the graphic is rendered. This
+    /// field may be used in conjunction with the User Input Flag field.
+    delay : u16,
+}
+
+fn parse_graphic_control_extension(rdr : &mut GifReader) -> GraphicControlExtension {
+    let block_size = rdr.read_u8() as usize;
+
+    if rdr.bytes_left() <= block_size || block_size != 4 {
+        panic!("Invalid GIF File: Invalid Graphic Control Extension Block");
+    }
+    let packed_fields = rdr.read_u8();
+    let disposal_method = match (packed_fields & 0b00011100) >> 2 {
+        1 => DisposalMethod::DoNotDispose,
+        2 => DisposalMethod::RestoreToBackgroundColor,
+        3 => DisposalMethod::RestoreToPrevious,
+        _ => DisposalMethod::NoDisposalSpecified,
+    };
+    let user_input : bool = packed_fields & 0x02 != 0;
+    let transparent_color_flag : bool = packed_fields & 0x01 != 0;
+    let delay = rdr.read_u16();
+    let transparent_color_index = match transparent_color_flag {
+        true => Some(rdr.read_u8()),
+        false => {
+            rdr.skip_bytes(1);
+            None
+        }
+    };
+    if rdr.bytes_left() == 0 || rdr.read_u8() != 0 {
+        panic!("Invalid GIF File: Graphic Control Extension truncated");
+    }
+    GraphicControlExtension {
+        disposal_method,
+        user_input,
+        transparent_color_index,
+        delay,
+    }
+}
+
+fn construct_next_frame(
+    rdr : &mut GifReader,
+    base_buffer : Option<Vec<u32>>,
+    img_height : u16,
+    img_width : u16,
+    background_color : &Option<&RGB>,
+    global_color_table : &Option<&[RGB]>,
+    transparent_color_index : &Option<u8>
+) -> Vec<u32> {
+    let curr_block_left = rdr.read_u16();
+    let curr_block_top = rdr.read_u16();
+    let curr_block_width = rdr.read_u16();
+    let curr_block_height = rdr.read_u16();
     let field = rdr.read_u8();
-    println!("x: {}, y: {}, {}x{}",
-        image_left_position, image_top_position, image_width, image_height);
 
     let has_local_color_table = field & 0x80 != 0;
-    let _has_interlacing = field & 0x40 != 0;
+
+    let has_interlacing = field & 0x40 != 0;
     let _is_sorted = field & 0x20 != 0;
     let _reserved_1 = field & 0x10;
     let _reserved_2 = field & 0x08;
-    let nb_entries : usize = 1 << ((field & 0x07) + 1);
+    let nb_color_entries : usize = 1 << ((field & 0x07) + 1);
+
+    // Current interlacing cycle - from 0 to 3 - and factor used to obtain the next line
+    // we should draw. Both are only needed when interlacing is enabled.
+    let (mut interlacing_cycle, mut line_factor) = if has_interlacing {
+        (0, 8)
+    } else {
+        (0, 1)
+    };
 
     let lct = if has_local_color_table {
-        Some(parse_color_table(rdr, nb_entries))
+        Some(parse_color_table(rdr, nb_color_entries))
     } else { None };
 
-    let initial_code_size = rdr.read_u8();
+    let current_color_table : &[RGB] = if let Some(c) = &lct {
+        c
+    } else {
+        match global_color_table {
+            &None => { panic!("Invalid GIF File: no color table found."); }
+            &Some(val) => val
+        }
+    };
 
-    // TODO Remove
-    let mut whole_data : Vec<u8> = vec![];
+    let initial_code_size = rdr.read_u8();
+    let mut decoder = LzwDecoder::new(initial_code_size);
+
+    if curr_block_width == 0 || curr_block_height == 0 {
+        let bg_color : u32 = match background_color {
+            Some(color) => (*color).into(),
+            None => DEFAULT_BACKGROUND_COLOR,
+        };
+        return vec![bg_color; img_height as usize * img_width as usize];
+    }
+
+    let (has_background_frame, mut global_buffer) = match base_buffer {
+        Some(frame) => (true, frame),
+        None => (false, vec![0; img_height as usize * img_width as usize]),
+    };
+
+    let mut x_pos : usize = curr_block_left as usize;
+    let mut y_pos : usize = curr_block_top as usize;
+    let max_pos_width = curr_block_width as usize + curr_block_left as usize - 1;
+    let max_pos_height = curr_block_height as usize + curr_block_top as usize - 1;
     loop {
         if rdr.bytes_left() <= 0 {
             panic!("Invalid GIF File: Image Descriptor Truncated");
         }
 
         let sub_block_size = rdr.read_u8() as usize;
-        // println!("Sub block size: {}", sub_block_size);
-        if sub_block_size == 0 {
-            println!("Whole data's len: {}", whole_data.len());
-            println!("sub block: {}x{}", image_height, image_width);
-
-            let data2 = lzw_decoder(&whole_data, initial_code_size);
-
-            let current_color_table = if let Some(c) = lct {
-                c
-            } else {
-                gct.unwrap()
-            };
-            let mut buffer: Vec<u32> = Vec::with_capacity(image_width as usize *
-                                                          image_height as usize);
-            let data2_len = data2.len();
-            for elt in data2 {
-                let rgb = &current_color_table[elt as usize];
-                let val = ((rgb.r as u32) << 16) + ((rgb.g as u32) << 8) + ((rgb.b as u32) << 0);
-                buffer.push(val);
+        if sub_block_size == 0x00 /* block terminator */ {
+            return global_buffer;
+        } else {
+            if rdr.bytes_left() <= sub_block_size {
+                panic!("Invalid GIF File: Image Descriptor Truncated");
             }
-            // println!(data2_len, buffer.capacity())
-            for _ in data2_len..buffer.capacity() {
-                buffer.push(0);
-            }
-
-            let mut window = Window::new(
-                "Test - ESC to exit",
-                image_width as usize,
-                image_height as usize,
-                WindowOptions::default(),
-            ).unwrap_or_else(|e| { panic!("{}", e); });
-
-            // Limit to max ~60 fps update rate
-            window.limit_update_rate(Some(std::time::Duration::from_micros(16600)));
-
-            while window.is_open() && !window.is_key_down(Key::Escape) {
-                // We unwrap here as we want this code to exit if it fails. Real applications may want to handle this in a different way
-                window
-                    .update_with_buffer(&buffer, image_width as usize, image_height as usize)
-                    .unwrap();
+            let sub_block_data = rdr.read_slice(sub_block_size);
+            let decoded_data = decoder.decode_next(&sub_block_data);
+            for elt in decoded_data {
+                if elt as usize >= current_color_table.len() {
+                    panic!("Invalid GIF File: ");
                 }
-            return ;
+                let pos = (y_pos * img_width as usize) + x_pos;
+                if pos >= global_buffer.len() {
+                    panic!("Invalid GIF File: too much data");
+                }
+                let pix_val : u32 = match transparent_color_index {
+                    Some(t_idx) if *t_idx == elt => {
+                        if has_background_frame {
+                            global_buffer[pos] // do not change anything
+                        } else {
+                            match background_color {
+                                Some(c) => (*c).into(),
+                                None => DEFAULT_BACKGROUND_COLOR,
+                            }
+                        }
+                    },
+                    _ => (&current_color_table[elt as usize]).into(),
+                };
+                global_buffer[pos] = pix_val;
+                x_pos += 1;
+                if x_pos > max_pos_width {
+                    y_pos += 1 * line_factor;
+                    if y_pos > max_pos_height {
+                        if !has_interlacing || interlacing_cycle >= 3 {
+                            if rdr.read_u8() == 0 {
+                                return global_buffer;
+                            }
+                            panic!("Invalid GIF File: Wrong amount of image data");
+                        }
+                        interlacing_cycle += 1;
+                        let (new_y_pos, new_line_factor) = match interlacing_cycle {
+                            1 => (4, 8),
+                            2 => (2, 4),
+                            _ => (1, 2)
+                        };
+                        y_pos = new_y_pos;
+                        line_factor = new_line_factor;
+                    }
+                    x_pos = curr_block_left as usize;
+                }
+            }
         }
-        if rdr.bytes_left() <= sub_block_size {
-            panic!("Invalid GIF File: Image Descriptor Truncated");
-        }
-        whole_data.extend(rdr.read_slice(sub_block_size));
     }
 }
 
@@ -209,6 +482,30 @@ struct RGB {
     r : u8,
     g : u8,
     b : u8,
+}
+
+impl From<u32> for RGB {
+    fn from(val : u32) -> RGB {
+        RGB {
+            r : (val >> 16) as u8,
+            g : (val >> 8) as u8,
+            b : val as u8,
+        }
+    }
+}
+
+impl Into<u32> for &RGB {
+    fn into(self) -> u32 {
+        ((self.r as u32) << 16) + ((self.g as u32) << 8) + ((self.b as u32) << 0)
+    }
+
+}
+
+impl Into<u32> for RGB {
+    fn into(self) -> u32 {
+        ((self.r as u32) << 16) + ((self.g as u32) << 8) + ((self.b as u32) << 0)
+    }
+
 }
 
 // TODO use C repr to parse it more rapidly?
@@ -254,7 +551,7 @@ fn parse_header(rdr : &mut GifReader) -> GifHeader {
     let background_color_index = rdr.read_u8();
     let pixel_aspect_ratio = rdr.read_u8();
 
-    let gct = if has_global_color_table {
+    let global_color_table = if has_global_color_table {
         Some(parse_color_table(rdr, nb_entries))
     } else {
         None
@@ -267,182 +564,6 @@ fn parse_header(rdr : &mut GifReader) -> GifHeader {
         is_table_sorted,
         background_color_index,
         pixel_aspect_ratio,
-        global_color_table: gct,
-    }
-}
-
-#[derive(Clone, Debug)]
-enum DictionaryValue {
-    None,
-    Clear,
-    Stop,
-    Repeat,
-    Value(Vec<u8>),
-}
-
-#[derive(Debug)]
-struct Dictionary {
-    min_code_size : u8,
-    table : Vec<DictionaryValue>,
-}
-
-impl Dictionary {
-    fn new(min_code_size : u8) -> Dictionary {
-        let table : Vec<DictionaryValue> = Vec::with_capacity(512);
-        let mut dict = Dictionary {
-            min_code_size,
-            table,
-        };
-        dict.clear();
-        dict
-    }
-
-    fn clear(&mut self) {
-        self.table.clear();
-        // println!("{}", self.min_code_size);
-        let initial_table_size : u16 = (1 << self.min_code_size as u16) + 2;
-        for i in 0..(initial_table_size - 2) {
-            self.table.push(DictionaryValue::Value(vec![i as u8]));
-        }
-        self.table.push(DictionaryValue::Clear);
-        self.table.push(DictionaryValue::Stop);
-    }
-
-    fn get_code(&self, code : u16) -> &DictionaryValue {
-        let code = code as usize;
-        if self.table.len() > code {
-            &self.table[code]
-        } else if code == self.table.len() {
-            &DictionaryValue::Repeat
-        } else {
-            &DictionaryValue::None
-        }
-    }
-
-    fn push_val(&mut self, val : Vec<u8>) {
-        self.table.push(DictionaryValue::Value(val));
-    }
-}
-
-/// Read bits from a byte stream, least significant bits first.
-/// Shamefully mostly-taken from the `gif` crate.
-/// Not that I don't understand it now!
-#[derive(Debug)]
-struct LsbReader {
-    /// Current number or bits waiting to be read
-    bits: u8,
-
-    /// Current pending value
-    acc: u32,
-}
-
-impl LsbReader {
-    /// Create a new LsbReader
-    fn new() -> LsbReader {
-        LsbReader {
-            bits: 0,
-            acc: 0,
-        }
-    }
-
-    /// Reads and consumes `n` amount of bits from `buf`.
-    /// Returns both the number or bytes read from the buffer and the read u16
-    /// value.
-    /// Warning: `n` cannot be superior to 16.
-    fn read_bits(&mut self, mut buf: &[u8], n: u8) -> (usize, Option<u16>) {
-        if n > 16 {
-            // This is a logic error the program should have prevented this
-            // Ideally we would used bounded a integer value instead of u8
-            panic!("Cannot read more than 16 bits")
-        }
-        let mut consumed = 0;
-        while self.bits < n {
-            let byte = if buf.len() > 0 {
-                let byte = buf[0];
-                buf = &buf[1..];
-                byte
-            } else {
-                return (consumed, None)
-            };
-            // Adds to perhaps previously-parsed bits
-            self.acc |= (byte as u32) << self.bits;
-            self.bits += 8;
-            consumed += 1;
-        }
-
-        // Only keeps bits corresponding to `n`
-        let res = self.acc & ((1 << n) - 1);
-
-        // Remove the `n` element we just read
-        self.acc >>= n;
-        self.bits -= n;
-
-        (consumed, Some(res as u16))
-    }
-}
-
-fn lzw_decoder(buf : &[u8], min_code_size : u8) -> Vec<u8> {
-    let mut current_val : Vec<u8> = vec![];
-    let mut bit_reader = LsbReader::new();
-    let mut dict  = Dictionary::new(min_code_size);
-    let mut decoded_buf : Vec<u8> = vec![];
-
-    let mut current_code_size = min_code_size + 1;
-    let mut current_offset = 0;
-    loop {
-        match bit_reader.read_bits(&buf[current_offset..], current_code_size) {
-            (_, None) => {
-                return decoded_buf;
-            },
-            (consumed, Some(val)) => {
-                current_offset += consumed;
-                // println!("Code encountered: {}", val);
-                match dict.get_code(val) {
-                    DictionaryValue::Clear => {
-                        dict.clear();
-                        current_code_size = min_code_size + 1;
-                        current_val = vec![];
-                    },
-                    DictionaryValue::Stop => {
-                        // println!("!! Stop");
-                        return decoded_buf
-                    },
-                    DictionaryValue::None => {
-                        // println!("!! None");
-                        panic!("Impossible to decode. Invalid value: {} {:?}", val, dict);
-                    },
-                    DictionaryValue::Repeat => {
-                        // println!("!! REPEAT");
-                        if current_val.len() == 0 {
-                            panic!("Impossible to decode. Invalid value: {} {:?}", val, dict);
-                        }
-                        let first_val = current_val[0];
-                        current_val.push(first_val);
-                        decoded_buf.extend(current_val.clone());
-                        // println!("New code pushed: {} = {:?}", dict.table.len(), &current_val);
-                        dict.push_val(current_val.clone());
-                        if dict.table.len() == (1 << current_code_size as usize) {
-                            current_code_size += 1;
-                        }
-                    },
-                    DictionaryValue::Value(val) => {
-                        // println!("Corresponding value(s): {:?}", val);
-                        decoded_buf.extend(val);
-                        if current_val.len() != 0 { // Only empty at the beginning or when cleared
-                            current_val.push(val[0]);
-                            let val_cloned = val.clone();
-                            // println!("New code pushed: {} = {:?}", dict.table.len(), &current_val);
-                            dict.push_val(current_val.clone());
-                            if dict.table.len() == (1 << current_code_size as usize) {
-                                current_code_size += 1;
-                            }
-                            current_val = val_cloned;
-                        } else {
-                            current_val.push(val[0]);
-                        }
-                    }
-                }
-            }
-        }
+        global_color_table,
     }
 }

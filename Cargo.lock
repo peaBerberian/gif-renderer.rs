@@ -72,7 +72,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "gif-displayer"
+name = "gif-decoder"
 version = "0.1.0"
 dependencies = [
  "minifb",
