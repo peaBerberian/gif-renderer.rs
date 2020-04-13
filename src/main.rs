@@ -123,7 +123,7 @@ fn main() {
                         // (And I just don't want to set it to infinite by default)
                         nb_loop = match parse_application_extension(&mut rdr).extension {
                             ApplicationExtensionValue::NetscapeLooping(x) => Some(x),
-                            ApplicationExtensionValue::NotKnown => None,
+                            ApplicationExtensionValue::NotKnown => nb_loop,
                         };
                     }
                     COMMENT_EXTENSION_LABEL => {
