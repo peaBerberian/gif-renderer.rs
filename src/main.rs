@@ -119,12 +119,13 @@ fn main() {
                         last_graphic_ext = Some(parse_graphic_control_extension(&mut rdr));
                     }
                     APPLICATION_EXTENSION_LABEL => {
+                        let extension = parse_application_extension(&mut rdr).extension;
+
                         // Only NETSCAPE2.0 is parsed for now as looping is an essential feature
                         // (And I just don't want to set it to infinite by default)
-                        nb_loop = match parse_application_extension(&mut rdr).extension {
-                            ApplicationExtensionValue::NetscapeLooping(x) => Some(x),
-                            ApplicationExtensionValue::NotKnown => nb_loop,
-                        };
+                        if let ApplicationExtensionValue::NetscapeLooping(x) = extension {
+                            nb_loop = Some(x);
+                        }
                     }
                     COMMENT_EXTENSION_LABEL => {
                         // We don't care about comments
