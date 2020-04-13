@@ -65,9 +65,8 @@ fn main() {
     // "disposal method" of the next frame encountered.
     let mut next_frame_base_buffer : Option<Vec<u32>> = None;
 
-    // Number of time the GIF should be looped on according to the NETSCAPE2.0
-    // Application extension. A value of `Some(0)` indicates that it should be looped
-    // forever.
+    // Number of time the GIF should be looped according to the NETSCAPE2.0 Application
+    // extension. A value of `Some(0)` indicates that it should be looped forever.
     let mut nb_loop : Option<u16> = None;
 
     // Store every frames and the corresponding delays to the next frame, if one.
@@ -81,7 +80,7 @@ fn main() {
                     None => (None, None)
                 };
 
-                // The "RestoreToPrevious" disposal method force us to keep the current base
+                // The "RestoreToPrevious" disposal method forces us to keep the current base
                 // buffer for the frame coming after that one.
                 use DisposalMethod::{*};
                 let cloned_image_background = match last_graphic_ext {
@@ -119,11 +118,11 @@ fn main() {
                         last_graphic_ext = Some(parse_graphic_control_extension(&mut rdr));
                     }
                     APPLICATION_EXTENSION_LABEL => {
-                        let extension = parse_application_extension(&mut rdr).extension;
+                        let extension = parse_application_extension(&mut rdr);
 
                         // Only NETSCAPE2.0 is parsed for now as looping is an essential feature
                         // (And I just don't want to set it to infinite by default)
-                        if let ApplicationExtensionValue::NetscapeLooping(x) = extension {
+                        if let ApplicationExtension::NetscapeLooping(x) = extension {
                             nb_loop = Some(x);
                         }
                     }
@@ -148,18 +147,12 @@ fn main() {
     }
 }
 
-enum ApplicationExtensionValue {
+enum ApplicationExtension {
     /// Looping value from the NETSCAPE2.0 extension.
     /// 0 means infinite looping, any other value would be the number of time
     /// the GIF image needs to be looped (played back from the beginning).
     NetscapeLooping(u16),
     NotKnown,
-}
-
-struct ApplicationExtension {
-    _app_name : String,
-    _app_auth_code : (u8, u8, u8),
-    extension : ApplicationExtensionValue,
 }
 
 /// Allows to skip sub-blocks when reached. You might want to do that when
@@ -208,17 +201,13 @@ fn parse_application_extension(rdr : &mut GifReader) -> ApplicationExtension {
 
     let mut data_len = rdr.read_u8() as usize;
     if data_len == 0 {
-        return ApplicationExtension {
-            _app_name,
-            _app_auth_code,
-            extension: ApplicationExtensionValue::NotKnown,
-        };
+        return ApplicationExtension::NotKnown;
     }
     if rdr.bytes_left() <= data_len {
         panic!("Invalid GIF File: Application Extension truncated");
     }
 
-    let mut ext : ApplicationExtensionValue = ApplicationExtensionValue::NotKnown;
+    let mut ext = ApplicationExtension::NotKnown;
 
     if _app_name == "NETSCAPE" &&
        _app_auth_code == (50, 46, 48)
@@ -229,7 +218,7 @@ fn parse_application_extension(rdr : &mut GifReader) -> ApplicationExtension {
             cur_offset += 1;
         } else {
             let loop_count = rdr.read_u16();
-            ext = ApplicationExtensionValue::NetscapeLooping(loop_count);
+            ext = ApplicationExtension::NetscapeLooping(loop_count);
             cur_offset += 3;
         }
         if data_len < cur_offset {
@@ -253,12 +242,7 @@ fn parse_application_extension(rdr : &mut GifReader) -> ApplicationExtension {
     if rdr.bytes_left() == 0 || rdr.read_u8() != 0x00 /* block terminator */ {
         panic!("Invalid GIF File: Application Extension truncated");
     }
-
-    ApplicationExtension {
-        _app_name,
-        _app_auth_code,
-        extension: ext,
-    }
+    ext
 }
 
 /// The available value for the `disposal_method` parsed from a graphic control
