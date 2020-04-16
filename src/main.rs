@@ -542,32 +542,3 @@ fn parse_header(rdr : &mut GifReader) -> GifHeader {
         global_color_table,
     }
 }
-
-// /// Errors triggered while parsing a GIF buffer.
-// #[derive(Debug)]
-// enum GifParsingError {
-//     /// A "block" in the GIF buffer was found to be incomplete.
-//     TruncatedBlock { block_name : String },
-//     /// This GIF buffer is missing its Header.
-//     NoGIFHeader,
-//     InvalidVersion(Option<String>)
-// }
-
-// impl std::error::Error for GifParsingError {}
-
-// impl std::fmt::Display for GifParsingError {
-//     fn fmt(&self, f: &mut std::fmt::Formatter)
-//     -> std::fmt::Result {
-//         match self {
-//             GifParsingError::NoGIFHeader =>
-//                 write!(f, "No \"GIF\" header found. Are you sure this is a GIF file?"),
-//             GifParsingError::InvalidVersion(v) =>
-//                 match v {
-//                     Some(version_number) => write!(f, "Version not recognized: {}", version_number),
-//                     None => write!(f, "Cannot read the current version."),
-//                 }
-//             GifParsingError::TruncatedBlock{ block_name } =>
-//                 write!(f, "The \"{}\" block appear to be incomplete.", block_name),
-//         }
-//     }
-// }
