@@ -82,4 +82,10 @@ impl GifReader {
     pub fn bytes_left(&self) -> usize {
         self.buf.len() - self.pos
     }
+
+    /// Returns `true` if there's no byte left to read in the buffer.
+    /// Returns `false` otherwise.
+    pub fn is_empty(&self) -> bool {
+        self.buf.is_empty()
+    }
 }

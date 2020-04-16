@@ -70,7 +70,7 @@ fn main() {
     // Store every frames and the corresponding delays to the next frame, if one.
     let mut frames : Vec<(Vec<u32>, Option<u16>)> = vec![];
 
-    while rdr.bytes_left() > 0 {
+    while !rdr.is_empty() {
         match rdr.read_u8() {
             IMAGE_DESCRIPTOR_BLOCK_ID => {
                 let (delay, transparent_color_index) = match &last_graphic_ext {
@@ -111,6 +111,9 @@ fn main() {
                 render::render_image(&frames, nb_loop, header.width as usize, header.height as usize);
             }
             EXTENSION_INTRODUCER_ID => {
+                if rdr.is_empty() {
+                    panic!("Invalid GIF File: Extension Introducer too short.");
+                }
                 match rdr.read_u8() {
                     GRAPHIC_CONTROL_EXTENSION_LABEL => {
                         last_graphic_ext = Some(parse_graphic_control_extension(&mut rdr));
@@ -127,7 +130,7 @@ fn main() {
                     COMMENT_EXTENSION_LABEL => {
                         // We don't care about comments
                         skip_sub_blocks(&mut rdr);
-                        if rdr.read_u8() != 0x00 /* block terminator */ {
+                        if rdr.is_empty() || rdr.read_u8() != 0x00 /* block terminator */ {
                             panic!("Invalid GIF File: A cooment extension does not \
                                terminate with a block terminator");
                         }
@@ -177,7 +180,7 @@ fn skip_sub_blocks(rdr : &mut GifReader) {
 /// it for now.
 /// TODO?
 fn skip_plain_text_extension(rdr : &mut GifReader) {
-    if rdr.read_u8() != 12 || rdr.bytes_left() <= 12 {
+    if rdr.bytes_left() <= 13 || rdr.read_u8() != 12 {
         panic!("Invalid GIF File: Plain text extension should have a length of 12.");
     }
     rdr.skip_bytes(12); // Skip whole plain text header
@@ -185,17 +188,19 @@ fn skip_plain_text_extension(rdr : &mut GifReader) {
 }
 
 fn parse_application_extension(rdr : &mut GifReader) -> ApplicationExtension {
-    let size_until_app_data = rdr.read_u8() as usize;
+    if rdr.bytes_left() < 13 {
+        panic!("Invalid GIF File: Application Extension Too short.");
+    }
 
-    if size_until_app_data != 11 || rdr.bytes_left() <= 11 {
+    if rdr.read_u8() != 11 {
         panic!("Invalid GIF File: Application Extension has an invalid length");
     }
-    let _app_name = match rdr.read_str(8) {
+    let app_name = match rdr.read_str(8) {
         Err(e) => panic!("Invalid GIF file:
             Impossible to read the application name: {}", e),
         Ok(x) => x
     };
-    let _app_auth_code = (rdr.read_u8(), rdr.read_u8(), rdr.read_u8());
+    let app_auth_code = (rdr.read_u8(), rdr.read_u8(), rdr.read_u8());
 
     let mut data_len = rdr.read_u8() as usize;
     if data_len == 0 {
@@ -207,13 +212,14 @@ fn parse_application_extension(rdr : &mut GifReader) -> ApplicationExtension {
 
     let mut ext = ApplicationExtension::NotKnown;
 
-    if _app_name == "NETSCAPE" &&
-       _app_auth_code == (50, 46, 48)
+    if app_name == "NETSCAPE" &&
+       app_auth_code == (50, 46, 48) &&
+       !rdr.is_empty()
     {
         let mut cur_offset = 0;
         let sub_block_id = rdr.read_u8();
-        if data_len != 0x03 || sub_block_id != 0x01 {
-            cur_offset += 1;
+        if data_len != 0x03 || sub_block_id != 0x01 || rdr.bytes_left() < 2 {
+            cur_offset += 1; // Not a valid NETSCAPE2.0 Looping extension, ignore
         } else {
             let loop_count = rdr.read_u16();
             ext = ApplicationExtension::NetscapeLooping(loop_count);
@@ -290,9 +296,12 @@ struct GraphicControlExtension {
 }
 
 fn parse_graphic_control_extension(rdr : &mut GifReader) -> GraphicControlExtension {
+    if rdr.bytes_left() <= 5 {
+        panic!("Invalid GIF File: Graphic Control Extension Block Too short.");
+    }
     let block_size = rdr.read_u8() as usize;
 
-    if rdr.bytes_left() <= block_size || block_size != 4 {
+    if block_size != 4 {
         panic!("Invalid GIF File: Invalid Graphic Control Extension Block");
     }
     let packed_fields = rdr.read_u8();
@@ -311,7 +320,7 @@ fn parse_graphic_control_extension(rdr : &mut GifReader) -> GraphicControlExtens
         rdr.skip_bytes(1);
         None
     };
-    if rdr.bytes_left() == 0 || rdr.read_u8() != 0 {
+    if rdr.read_u8() != 0 {
         panic!("Invalid GIF File: Graphic Control Extension truncated");
     }
     GraphicControlExtension {
@@ -331,6 +340,9 @@ fn construct_next_frame(
     background_color : Option<RGB>,
     transparent_color_index : Option<u8>
 ) -> Vec<u32> {
+    if rdr.bytes_left() < 9 {
+        panic!("Invalid GIF file: Incomplete Image Descriptor.");
+    }
     let curr_block_left = rdr.read_u16();
     let curr_block_top = rdr.read_u16();
     let curr_block_width = rdr.read_u16();
@@ -366,6 +378,14 @@ fn construct_next_frame(
         }
     };
 
+    let (has_background_frame, mut global_buffer) = match base_buffer {
+        Some(frame) => (true, frame),
+        None => (false, vec![0; img_height as usize * img_width as usize]),
+    };
+
+    if rdr.bytes_left() == 0 {
+        return global_buffer;
+    }
     let initial_code_size = rdr.read_u8();
     let mut decoder = LzwDecoder::new(initial_code_size);
 
@@ -376,11 +396,6 @@ fn construct_next_frame(
         };
         return vec![bg_color; img_height as usize * img_width as usize];
     }
-
-    let (has_background_frame, mut global_buffer) = match base_buffer {
-        Some(frame) => (true, frame),
-        None => (false, vec![0; img_height as usize * img_width as usize]),
-    };
 
     let mut x_pos : usize = curr_block_left as usize;
     let mut y_pos : usize = curr_block_top as usize;
@@ -427,7 +442,7 @@ fn construct_next_frame(
                     y_pos += line_step;
                     if y_pos > max_pos_height {
                         if !has_interlacing || interlacing_cycle >= 3 {
-                            if rdr.read_u8() == 0 {
+                            if rdr.bytes_left() == 0 || rdr.read_u8() == 0 {
                                 return global_buffer;
                             }
                             panic!("Invalid GIF File: Wrong amount of image data");
