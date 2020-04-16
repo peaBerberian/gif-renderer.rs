@@ -1,9 +1,11 @@
+mod color;
 mod decoder;
 mod gif_reader;
 mod render;
 
-use gif_reader::GifReader;
+use color::RGB;
 use decoder::LzwDecoder;
+use gif_reader::GifReader;
 
 /// Minimum size a GIF buffer should have to be valid.
 const HEADER_SIZE : usize = 13;
@@ -38,10 +40,6 @@ fn main() {
         panic!("Missing file argument");
     }
     let file_data = std::fs::read(&args[1]).unwrap();
-    if file_data.len() < HEADER_SIZE {
-        panic!("Invalid GIF file: too short");
-    }
-
     let mut rdr = GifReader::new(file_data);
 
     let header = parse_header(&mut rdr);
@@ -356,7 +354,7 @@ fn construct_next_frame(
     };
 
     let lct = if has_local_color_table {
-        Some(parse_color_table(rdr, nb_color_entries))
+        Some(color::parse_color_table(rdr, nb_color_entries))
     } else { None };
 
     let current_color_table : &[RGB] = if let Some(c) = &lct {
@@ -461,55 +459,12 @@ struct GifHeader {
     global_color_table : Option<Vec<RGB>>,
 }
 
-#[derive(Debug, Clone, Copy)]
-struct RGB {
-    r : u8,
-    g : u8,
-    b : u8,
-}
-
-impl From<u32> for RGB {
-    fn from(val : u32) -> RGB {
-        RGB {
-            r : (val >> 16) as u8,
-            g : (val >> 8) as u8,
-            b : val as u8,
-        }
-    }
-}
-
-impl Into<u32> for &RGB {
-    fn into(self) -> u32 {
-        ((self.r as u32) << 16) + ((self.g as u32) << 8) + (self.b as u32)
-    }
-
-}
-
-impl Into<u32> for RGB {
-    fn into(self) -> u32 {
-        ((self.r as u32) << 16) + ((self.g as u32) << 8) + (self.b as u32)
-    }
-
-}
-
-// TODO use C repr to parse it more rapidly?
-fn parse_color_table(rdr : &mut GifReader, nb_entries : usize) -> Vec<RGB> {
-    let ct_size : usize = nb_entries * 3;
-    if rdr.bytes_left() < ct_size  {
-        panic!("Invalid GIF file: truncated color table");
-    }
-    let mut ct : Vec<RGB> = vec![RGB { r: 0, g: 0, b: 0}; nb_entries as usize];
-    for curr_elt_idx in 0..(nb_entries) {
-        ct[curr_elt_idx as usize] = RGB {
-            r: rdr.read_u8(),
-            g: rdr.read_u8(),
-            b: rdr.read_u8(),
-        };
-    }
-    ct
-}
-
+/// Parse Header part of a GIF buffer and the Global Color Table, if one.
 fn parse_header(rdr : &mut GifReader) -> GifHeader {
+    if rdr.bytes_left() < HEADER_SIZE {
+        panic!("Invalid GIF file: The file is too short.");
+    }
+
     match rdr.read_str(3) {
         Err(e) => panic!("Invalid GIF file:
             Impossible to read the header, obtained: {}.", e),
@@ -536,7 +491,7 @@ fn parse_header(rdr : &mut GifReader) -> GifHeader {
     let pixel_aspect_ratio = rdr.read_u8();
 
     let global_color_table = if has_global_color_table {
-        Some(parse_color_table(rdr, nb_entries))
+        Some(color::parse_color_table(rdr, nb_entries))
     } else {
         None
     };
