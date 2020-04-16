@@ -25,6 +25,13 @@ impl GifReader {
     /// Read the next N bytes as an utf8 string.
     /// /!\ Perform no bound checking. Will panic if there's less than the
     /// indicated number of bytes in the buffer.
+    /// TODO GIF strings always seem to be in ASCII.
+    /// Here I'm left with a dilemma:
+    ///   - should I return an error if the most significant bit is set to `1`
+    ///     (considering ASCII codes are 7 bits only)
+    ///   - should I ignore it and just consider the other bits
+    /// For now, we parse it as if it was UTF-8 which may be compatible, but seems
+    /// overkill. Maybe a better solution can be found.
     pub fn read_str(&mut self, nb_bytes : usize) -> Result<String, std::string::FromUtf8Error> {
         let end = self.pos + nb_bytes;
         let data = &self.buf[self.pos..end];
