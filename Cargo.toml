@@ -1,5 +1,5 @@
 [package]
-name = "gif-decoder"
+name = "gif-renderer"
 version = "0.1.0"
 authors = ["peaBerberian <pea.berberian@gmail.com>"]
 edition = "2018"
