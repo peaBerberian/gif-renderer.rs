@@ -461,10 +461,11 @@ fn construct_next_frame(
                     y_pos += line_step;
                     if y_pos > max_pos_height {
                         if !has_interlacing || interlacing_cycle >= 3 {
-                            if rdr.bytes_left() == 0 || rdr.read_u8() == 0 {
+                            if rdr.bytes_left() == 0 {
                                 return global_buffer;
                             }
-                            error::fail_on_expected_block_terminator(Some("Image Descriptor"));
+                            skip_sub_blocks(rdr);
+                            return global_buffer;
                         }
                         interlacing_cycle += 1;
                         let (new_y_pos, new_line_step) = match interlacing_cycle {
