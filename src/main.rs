@@ -208,12 +208,8 @@ fn parse_application_extension(rdr : &mut GifReader) -> ApplicationExtension {
         error::fail_on_block_invalid_length("Application Extension");
     }
     let app_name = match rdr.read_str(8) {
-        Err(_) => {
-            eprintln!("Error: An Application Extension has an \
-                un-readable application name.");
-            std::process::exit(1);
-        },
-        Ok(x) => x
+        Err(_) => None,
+        Ok(x) => Some(x)
     };
     let app_auth_code = (rdr.read_u8(), rdr.read_u8(), rdr.read_u8());
 
@@ -227,7 +223,7 @@ fn parse_application_extension(rdr : &mut GifReader) -> ApplicationExtension {
 
     let mut ext = ApplicationExtension::NotKnown;
 
-    if app_name == "NETSCAPE" &&
+    if app_name == Some("NETSCAPE".to_owned()) &&
        app_auth_code == (50, 46, 48) &&
        !rdr.is_empty()
     {
