@@ -30,7 +30,7 @@ const COMMENT_EXTENSION_LABEL : u8 = 0xFE;
 const PLAIN_TEXT_EXTENSION_LABEL : u8 = 0x01;
 
 /// Background color used when none is defined.
-const DEFAULT_BACKGROUND_COLOR : u32 = 0xFFFFFF;
+const DEFAULT_BACKGROUND_COLOR : u32 = 0x00FF_FFFF;
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
@@ -52,7 +52,7 @@ fn main() {
             if gct.len() <= index {
                 panic!("Invalid GIF File: Invalid background color index: {}", index);
             }
-            (Some(&gct[index]), Some(gct.as_slice()))
+            (Some(gct[index]), Some(gct.as_slice()))
         } else {
             (None, None)
         };
@@ -90,12 +90,12 @@ fn main() {
                 };
 
                 let block = construct_next_frame(&mut rdr,
+                                                 &global_color_table,
                                                  next_frame_base_buffer,
                                                  header.height,
                                                  header.width,
-                                                 &background_color,
-                                                 &global_color_table,
-                                                 &transparent_color_index);
+                                                 background_color,
+                                                 transparent_color_index);
 
                 // Obtain the base buffer for the next frame according to the current disposal
                 // method
@@ -298,7 +298,7 @@ fn parse_graphic_control_extension(rdr : &mut GifReader) -> GraphicControlExtens
         panic!("Invalid GIF File: Invalid Graphic Control Extension Block");
     }
     let packed_fields = rdr.read_u8();
-    let disposal_method = match (packed_fields & 0b00011100) >> 2 {
+    let disposal_method = match (packed_fields & 0b0001_1100) >> 2 {
         1 => DisposalMethod::DoNotDispose,
         2 => DisposalMethod::RestoreToBackgroundColor,
         3 => DisposalMethod::RestoreToPrevious,
@@ -307,12 +307,11 @@ fn parse_graphic_control_extension(rdr : &mut GifReader) -> GraphicControlExtens
     let user_input : bool = packed_fields & 0x02 != 0;
     let transparent_color_flag : bool = packed_fields & 0x01 != 0;
     let delay = rdr.read_u16();
-    let transparent_color_index = match transparent_color_flag {
-        true => Some(rdr.read_u8()),
-        false => {
-            rdr.skip_bytes(1);
-            None
-        }
+    let transparent_color_index = if transparent_color_flag {
+        Some(rdr.read_u8())
+    } else {
+        rdr.skip_bytes(1);
+        None
     };
     if rdr.bytes_left() == 0 || rdr.read_u8() != 0 {
         panic!("Invalid GIF File: Graphic Control Extension truncated");
@@ -327,12 +326,12 @@ fn parse_graphic_control_extension(rdr : &mut GifReader) -> GraphicControlExtens
 
 fn construct_next_frame(
     rdr : &mut GifReader,
+    global_color_table : &Option<&[RGB]>,
     base_buffer : Option<Vec<u32>>,
     img_height : u16,
     img_width : u16,
-    background_color : &Option<&RGB>,
-    global_color_table : &Option<&[RGB]>,
-    transparent_color_index : &Option<u8>
+    background_color : Option<RGB>,
+    transparent_color_index : Option<u8>
 ) -> Vec<u32> {
     let curr_block_left = rdr.read_u16();
     let curr_block_top = rdr.read_u16();
@@ -348,9 +347,9 @@ fn construct_next_frame(
     let _reserved_2 = field & 0x08;
     let nb_color_entries : usize = 1 << ((field & 0x07) + 1);
 
-    // Current interlacing cycle - from 0 to 3 - and factor used to obtain the next line
+    // Current interlacing cycle - from 0 to 3 - and step used to obtain the next line
     // we should draw. Both are only needed when interlacing is enabled.
-    let (mut interlacing_cycle, mut line_factor) = if has_interlacing {
+    let (mut interlacing_cycle, mut line_step) = if has_interlacing {
         (0, 8)
     } else {
         (0, 1)
@@ -364,8 +363,8 @@ fn construct_next_frame(
         c
     } else {
         match global_color_table {
-            &None => { panic!("Invalid GIF File: no color table found."); }
-            &Some(val) => val
+            None => { panic!("Invalid GIF File: no color table found."); }
+            Some(val) => val
         }
     };
 
@@ -374,7 +373,7 @@ fn construct_next_frame(
 
     if curr_block_width == 0 || curr_block_height == 0 {
         let bg_color : u32 = match background_color {
-            Some(color) => (*color).into(),
+            Some(color) => color.into(),
             None => DEFAULT_BACKGROUND_COLOR,
         };
         return vec![bg_color; img_height as usize * img_width as usize];
@@ -390,7 +389,7 @@ fn construct_next_frame(
     let max_pos_width = curr_block_width as usize + curr_block_left as usize - 1;
     let max_pos_height = curr_block_height as usize + curr_block_top as usize - 1;
     loop {
-        if rdr.bytes_left() <= 0 {
+        if rdr.bytes_left() == 0 {
             panic!("Invalid GIF File: Image Descriptor Truncated");
         }
 
@@ -412,12 +411,12 @@ fn construct_next_frame(
                     panic!("Invalid GIF File: too much data");
                 }
                 let pix_val : u32 = match transparent_color_index {
-                    Some(t_idx) if *t_idx == elt => {
+                    Some(t_idx) if t_idx == elt => {
                         if has_background_frame {
                             global_buffer[pos] // do not change anything
                         } else {
                             match background_color {
-                                Some(c) => (*c).into(),
+                                Some(c) => c.into(),
                                 None => DEFAULT_BACKGROUND_COLOR,
                             }
                         }
@@ -427,7 +426,7 @@ fn construct_next_frame(
                 global_buffer[pos] = pix_val;
                 x_pos += 1;
                 if x_pos > max_pos_width {
-                    y_pos += 1 * line_factor;
+                    y_pos += line_step;
                     if y_pos > max_pos_height {
                         if !has_interlacing || interlacing_cycle >= 3 {
                             if rdr.read_u8() == 0 {
@@ -436,13 +435,13 @@ fn construct_next_frame(
                             panic!("Invalid GIF File: Wrong amount of image data");
                         }
                         interlacing_cycle += 1;
-                        let (new_y_pos, new_line_factor) = match interlacing_cycle {
+                        let (new_y_pos, new_line_step) = match interlacing_cycle {
                             1 => (4, 8),
                             2 => (2, 4),
                             _ => (1, 2)
                         };
                         y_pos = new_y_pos;
-                        line_factor = new_line_factor;
+                        line_step = new_line_step;
                     }
                     x_pos = curr_block_left as usize;
                 }
@@ -462,7 +461,7 @@ struct GifHeader {
     global_color_table : Option<Vec<RGB>>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 struct RGB {
     r : u8,
     g : u8,
@@ -481,14 +480,14 @@ impl From<u32> for RGB {
 
 impl Into<u32> for &RGB {
     fn into(self) -> u32 {
-        ((self.r as u32) << 16) + ((self.g as u32) << 8) + ((self.b as u32) << 0)
+        ((self.r as u32) << 16) + ((self.g as u32) << 8) + (self.b as u32)
     }
 
 }
 
 impl Into<u32> for RGB {
     fn into(self) -> u32 {
-        ((self.r as u32) << 16) + ((self.g as u32) << 8) + ((self.b as u32) << 0)
+        ((self.r as u32) << 16) + ((self.g as u32) << 8) + (self.b as u32)
     }
 
 }

@@ -42,7 +42,7 @@ impl LzwDecoder {
                             panic!("Impossible to decode. Invalid value: {}", code);
                         },
                         DictionaryValue::Repeat => {
-                            if self.current_val.len() == 0 {
+                            if self.current_val.is_empty() {
                                 panic!("Impossible to decode. Invalid value: {}", code);
                             }
                             let first_val = self.current_val[0];
@@ -135,20 +135,20 @@ impl LzwDictionary {
 
     /// Get the value corresponding to the code given.
     fn get_value(&self, code : u16) -> DictionaryValue {
+        use std::cmp::Ordering;
+
         let code = code as usize;
-        if self.table.len() > code {
-            match &self.table[code] {
+        match code.cmp(&self.table.len()) {
+            Ordering::Less => match &self.table[code] {
                 Some(val) => DictionaryValue::Value(val.clone()),
                 None => if code == 1 << self.min_code_size as u16 {
                     DictionaryValue::Clear
                 } else {
                     DictionaryValue::Stop
                 }
-            }
-        } else if code == self.table.len() {
-            DictionaryValue::Repeat
-        } else {
-            DictionaryValue::None
+            },
+            Ordering::Equal => DictionaryValue::Repeat,
+            Ordering::Greater => DictionaryValue::None,
         }
     }
 
@@ -201,7 +201,7 @@ impl LsbReader {
         }
         let mut consumed = 0;
         while self.bits < code_size {
-            let byte = if buf.len() > 0 {
+            let byte = if !buf.is_empty() {
                 let byte = buf[0];
                 buf = &buf[1..];
                 byte

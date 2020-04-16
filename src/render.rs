@@ -37,16 +37,13 @@ pub fn render_image(
         if img_idx != nb_images -1 {
             img_idx += 1;
         } else {
-            match nb_loop {
-                Some(x) => {
-                    if x == 0 {
-                        img_idx = 0;
-                    } else if curr_loop < x {
-                        img_idx = 0;
-                        curr_loop += 1;
-                    }
+            if let Some(x) = nb_loop {
+                if x == 0 {
+                    img_idx = 0;
+                } else if curr_loop < x {
+                    img_idx = 0;
+                    curr_loop += 1;
                 }
-                _ => {}
             }
         }
     }
