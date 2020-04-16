@@ -104,12 +104,13 @@ fn main() {
                 // Obtain the base buffer for the next frame according to the current disposal
                 // method
                 next_frame_base_buffer = match last_graphic_ext {
-                    Some(GraphicControlExtension { disposal_method: DoNotDispose, ..  }) => {
+                    Some(GraphicControlExtension { disposal_method: DoNotDispose, ..  }) |
+                    Some(GraphicControlExtension { disposal_method: NoDisposalSpecified, ..  }) => {
                         Some(block.clone())
                     },
-                    Some(GraphicControlExtension { disposal_method: RestoreToBackgroundColor, ..  }) =>
-                        None,
-                    _ => cloned_image_background,
+                    Some(GraphicControlExtension { disposal_method: RestoreToPrevious, ..}) =>
+                        cloned_image_background,
+                    _ => None,
                 };
                 frames.push((block, delay));
             }
