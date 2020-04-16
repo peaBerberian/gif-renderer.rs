@@ -39,11 +39,13 @@ impl LzwDecoder {
                             return decoded_buf
                         },
                         DictionaryValue::None => {
-                            panic!("Impossible to decode. Invalid value: {}", code);
+                            eprintln!("Error: Impossible to decode, found unknown code: {}", code);
+                            std::process::exit(1);
                         },
                         DictionaryValue::Repeat => {
                             if self.current_val.is_empty() {
-                                panic!("Impossible to decode. Invalid value: {}", code);
+                                eprintln!("Error: Impossible to decode, found unknown code: {}", code);
+                                std::process::exit(1);
                             }
                             let first_val = self.current_val[0];
                             self.current_val.push(first_val);

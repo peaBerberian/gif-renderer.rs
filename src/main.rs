@@ -1,5 +1,6 @@
 mod color;
 mod decoder;
+mod error;
 mod gif_reader;
 mod render;
 
@@ -37,9 +38,13 @@ const DEFAULT_BACKGROUND_COLOR : u32 = 0x00FF_FFFF;
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     if args.len() < 2 {
-        panic!("Missing file argument");
+        eprintln!("Error: Missing file path in argument.");
+        std::process::exit(1);
     }
-    let file_data = std::fs::read(&args[1]).unwrap();
+    let file_data = std::fs::read(&args[1]).unwrap_or_else(|err| {
+        eprintln!("Error: Error while opening {}: {}", &args[1], err);
+        std::process::exit(1);
+    });
     let mut rdr = GifReader::new(file_data);
 
     let header = parse_header(&mut rdr);
@@ -48,7 +53,8 @@ fn main() {
         if let Some(gct) = &header.global_color_table {
             let index = header.background_color_index as usize;
             if gct.len() <= index {
-                panic!("Invalid GIF File: Invalid background color index: {}", index);
+                eprintln!("Error: Invalid GIF File: Invalid background color index: {}", index);
+                std::process::exit(1);
             }
             (Some(gct[index]), Some(gct.as_slice()))
         } else {
@@ -112,7 +118,7 @@ fn main() {
             }
             EXTENSION_INTRODUCER_ID => {
                 if rdr.is_empty() {
-                    panic!("Invalid GIF File: Extension Introducer too short.");
+                    error::fail_on_truncated_block("Extension");
                 }
                 match rdr.read_u8() {
                     GRAPHIC_CONTROL_EXTENSION_LABEL => {
@@ -131,19 +137,22 @@ fn main() {
                         // We don't care about comments
                         skip_sub_blocks(&mut rdr);
                         if rdr.is_empty() || rdr.read_u8() != 0x00 /* block terminator */ {
-                            panic!("Invalid GIF File: A cooment extension does not \
-                               terminate with a block terminator");
+                            error::fail_on_expected_block_terminator(Some("Comment"));
                         }
                     }
                     PLAIN_TEXT_EXTENSION_LABEL => {
                         skip_plain_text_extension(&mut rdr);
                     }
-                    _ => {
-                        panic!("Invalid GIF File: unknown extension");
+                    x => {
+                        eprintln!("Error: Unrecognized Extension block: {}.", x);
+                        std::process::exit(1);
                     }
                 }
             }
-            x => { panic!("Unrecognized code {} at line {}", x, rdr.get_pos()); }
+            x => {
+                eprintln!("Error: Unrecognized code. Found {} at position {}.", x, rdr.get_pos());
+                std::process::exit(1);
+            }
         }
     }
 }
@@ -161,7 +170,8 @@ enum ApplicationExtension {
 /// (e.g. comments).
 fn skip_sub_blocks(rdr : &mut GifReader) {
     if rdr.bytes_left() == 0 {
-        panic!("Invalid GIF File: Invalid sub-block data");
+        eprintln!("Error: Incomplete sub-block found.");
+        std::process::exit(1);
     }
     loop {
         let size_of_block = rdr.read_u8() as usize;
@@ -169,7 +179,8 @@ fn skip_sub_blocks(rdr : &mut GifReader) {
             return;
         }
         if rdr.bytes_left() <= size_of_block {
-            panic!("Invalid GIF File: Invalid sub-block data");
+            eprintln!("Error: Incomplete sub-block found.");
+            std::process::exit(1);
         }
         rdr.skip_bytes(size_of_block);
     }
@@ -181,7 +192,7 @@ fn skip_sub_blocks(rdr : &mut GifReader) {
 /// TODO?
 fn skip_plain_text_extension(rdr : &mut GifReader) {
     if rdr.bytes_left() <= 13 || rdr.read_u8() != 12 {
-        panic!("Invalid GIF File: Plain text extension should have a length of 12.");
+        error::fail_on_truncated_block("Plain Text Extension");
     }
     rdr.skip_bytes(12); // Skip whole plain text header
     skip_sub_blocks(rdr);
@@ -189,15 +200,18 @@ fn skip_plain_text_extension(rdr : &mut GifReader) {
 
 fn parse_application_extension(rdr : &mut GifReader) -> ApplicationExtension {
     if rdr.bytes_left() < 13 {
-        panic!("Invalid GIF File: Application Extension Too short.");
+        error::fail_on_truncated_block("Application Extension");
     }
 
     if rdr.read_u8() != 11 {
-        panic!("Invalid GIF File: Application Extension has an invalid length");
+        error::fail_on_block_invalid_length("Application Extension");
     }
     let app_name = match rdr.read_str(8) {
-        Err(e) => panic!("Invalid GIF file:
-            Impossible to read the application name: {}", e),
+        Err(_) => {
+            eprintln!("Error: An Application Extension has an \
+                un-readable application name.");
+            std::process::exit(1);
+        },
         Ok(x) => x
     };
     let app_auth_code = (rdr.read_u8(), rdr.read_u8(), rdr.read_u8());
@@ -207,7 +221,7 @@ fn parse_application_extension(rdr : &mut GifReader) -> ApplicationExtension {
         return ApplicationExtension::NotKnown;
     }
     if rdr.bytes_left() <= data_len {
-        panic!("Invalid GIF File: Application Extension truncated");
+        error::fail_on_truncated_block("Application Extension");
     }
 
     let mut ext = ApplicationExtension::NotKnown;
@@ -226,7 +240,7 @@ fn parse_application_extension(rdr : &mut GifReader) -> ApplicationExtension {
             cur_offset += 3;
         }
         if data_len < cur_offset {
-            panic!("Invalid GIF File: Application Extension truncated");
+            error::fail_on_truncated_block("Application Extension");
         }
         data_len -= cur_offset;
     }
@@ -235,7 +249,7 @@ fn parse_application_extension(rdr : &mut GifReader) -> ApplicationExtension {
     loop {
         let bytes_left = rdr.bytes_left();
         if bytes_left < data_len {
-            panic!("Invalid GIF File: Application Extension truncated 1");
+            error::fail_on_truncated_block("Application Extension");
         }
         if bytes_left == 0 || data_len == 0 {
             break;
@@ -244,7 +258,7 @@ fn parse_application_extension(rdr : &mut GifReader) -> ApplicationExtension {
         data_len = rdr.read_u8() as usize;
     }
     if rdr.bytes_left() == 0 || rdr.read_u8() != 0x00 /* block terminator */ {
-        panic!("Invalid GIF File: Application Extension truncated");
+        error::fail_on_truncated_block("Application Extension");
     }
     ext
 }
@@ -297,12 +311,12 @@ struct GraphicControlExtension {
 
 fn parse_graphic_control_extension(rdr : &mut GifReader) -> GraphicControlExtension {
     if rdr.bytes_left() <= 5 {
-        panic!("Invalid GIF File: Graphic Control Extension Block Too short.");
+        error::fail_on_truncated_block("Graphic Control Extension");
     }
     let block_size = rdr.read_u8() as usize;
 
     if block_size != 4 {
-        panic!("Invalid GIF File: Invalid Graphic Control Extension Block");
+        error::fail_on_block_invalid_length("Graphic Control Extension");
     }
     let packed_fields = rdr.read_u8();
     let disposal_method = match (packed_fields & 0b0001_1100) >> 2 {
@@ -321,7 +335,7 @@ fn parse_graphic_control_extension(rdr : &mut GifReader) -> GraphicControlExtens
         None
     };
     if rdr.read_u8() != 0 {
-        panic!("Invalid GIF File: Graphic Control Extension truncated");
+        error::fail_on_truncated_block("Graphic Control Extension");
     }
     GraphicControlExtension {
         disposal_method,
@@ -341,7 +355,7 @@ fn construct_next_frame(
     transparent_color_index : Option<u8>
 ) -> Vec<u32> {
     if rdr.bytes_left() < 9 {
-        panic!("Invalid GIF file: Incomplete Image Descriptor.");
+        error::fail_on_truncated_block("Image Descriptor");
     }
     let curr_block_left = rdr.read_u16();
     let curr_block_top = rdr.read_u16();
@@ -373,7 +387,10 @@ fn construct_next_frame(
         c
     } else {
         match global_color_table {
-            None => { panic!("Invalid GIF File: no color table found."); }
+            None => {
+                eprintln!("Error: No color table found for an Image Descriptor.");
+                std::process::exit(0);
+            }
             Some(val) => val
         }
     };
@@ -403,7 +420,7 @@ fn construct_next_frame(
     let max_pos_height = curr_block_height as usize + curr_block_top as usize - 1;
     loop {
         if rdr.bytes_left() == 0 {
-            panic!("Invalid GIF File: Image Descriptor Truncated");
+            error::fail_on_truncated_block("Image Descriptor");
         }
 
         let sub_block_size = rdr.read_u8() as usize;
@@ -411,17 +428,19 @@ fn construct_next_frame(
             return global_buffer;
         } else {
             if rdr.bytes_left() <= sub_block_size {
-                panic!("Invalid GIF File: Image Descriptor Truncated");
+                error::fail_on_truncated_block("Image Descriptor");
             }
             let sub_block_data = rdr.read_slice(sub_block_size);
             let decoded_data = decoder.decode_next(&sub_block_data);
             for elt in decoded_data {
                 if elt as usize >= current_color_table.len() {
-                    panic!("Invalid GIF File: ");
+                    eprintln!("Error: Invalid color found in Image Descriptor.");
+                    std::process::exit(1);
                 }
                 let pos = (y_pos * img_width as usize) + x_pos;
                 if pos >= global_buffer.len() {
-                    panic!("Invalid GIF File: too much data");
+                    eprintln!("Error: Too much pixels declared in an Image Descriptor.");
+                    std::process::exit(1);
                 }
                 let pix_val : u32 = match transparent_color_index {
                     Some(t_idx) if t_idx == elt => {
@@ -445,7 +464,7 @@ fn construct_next_frame(
                             if rdr.bytes_left() == 0 || rdr.read_u8() == 0 {
                                 return global_buffer;
                             }
-                            panic!("Invalid GIF File: Wrong amount of image data");
+                            error::fail_on_expected_block_terminator(Some("Image Descriptor"));
                         }
                         interlacing_cycle += 1;
                         let (new_y_pos, new_line_step) = match interlacing_cycle {
@@ -477,19 +496,19 @@ struct GifHeader {
 /// Parse Header part of a GIF buffer and the Global Color Table, if one.
 fn parse_header(rdr : &mut GifReader) -> GifHeader {
     if rdr.bytes_left() < HEADER_SIZE {
-        panic!("Invalid GIF file: The file is too short.");
+        eprintln!("Error: incomple GIF Buffer");
+        std::process::exit(1);
     }
 
     match rdr.read_str(3) {
-        Err(e) => panic!("Invalid GIF file:
-            Impossible to read the header, obtained: {}.", e),
-        Ok(x) if x != "GIF" => panic!("Invalid GIF file: Missing GIF header."),
+        Err(_) => error::fail_on_no_gif_header(),
+        Ok(x) if x != "GIF" => error::fail_on_no_gif_header(),
         _ => {}
     }
 
     match rdr.read_str(3) {
-        Err(x) => panic!("Impossible to parse the version: {}.", x),
-        Ok(v) if v != "89a" && v != "87a" => panic!("Unmanaged version: {}", v),
+        Err(_) => error::fail_on_invalid_version(None),
+        Ok(v) if v != "89a" && v != "87a" => error::fail_on_invalid_version(Some(v)),
         _ => {}
     }
 
@@ -521,3 +540,32 @@ fn parse_header(rdr : &mut GifReader) -> GifHeader {
         global_color_table,
     }
 }
+
+// /// Errors triggered while parsing a GIF buffer.
+// #[derive(Debug)]
+// enum GifParsingError {
+//     /// A "block" in the GIF buffer was found to be incomplete.
+//     TruncatedBlock { block_name : String },
+//     /// This GIF buffer is missing its Header.
+//     NoGIFHeader,
+//     InvalidVersion(Option<String>)
+// }
+
+// impl std::error::Error for GifParsingError {}
+
+// impl std::fmt::Display for GifParsingError {
+//     fn fmt(&self, f: &mut std::fmt::Formatter)
+//     -> std::fmt::Result {
+//         match self {
+//             GifParsingError::NoGIFHeader =>
+//                 write!(f, "No \"GIF\" header found. Are you sure this is a GIF file?"),
+//             GifParsingError::InvalidVersion(v) =>
+//                 match v {
+//                     Some(version_number) => write!(f, "Version not recognized: {}", version_number),
+//                     None => write!(f, "Cannot read the current version."),
+//                 }
+//             GifParsingError::TruncatedBlock{ block_name } =>
+//                 write!(f, "The \"{}\" block appear to be incomplete.", block_name),
+//         }
+//     }
+// }

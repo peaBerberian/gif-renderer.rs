@@ -30,14 +30,6 @@ Long answer, there's still some work to do:
 
 --
 
-For example, invalid gif files will just trigger what rust calls a "panic"
-which will result in a difficult-to-read error report.
-
-I still have to work on a better error management to write a clean error to
-stderr.
-
---
-
 The GIF 89a "Plain Text Extension" is ignored when encountered in a GIF file.
 
 Plain Text Extension support is hard to do, never used and even web browsers do
@@ -55,5 +47,8 @@ rendered while the next one is still decoding.
 
 --
 
-As an optional but useful feature, HTTP(s) addresses could also be handled.
-With the rendering happening as soon as the first frame data is received.
+In the same spirit, instead of putting the whole file into memory, we could read
+it in a more stream-like manner. This is not something really needed for most
+use cases because most GIF files are relatively small, but it could be useful
+for very large files or to where fetching the data is costly, like in a network
+context.

@@ -35,7 +35,8 @@ impl Into<u32> for RGB {
 pub fn parse_color_table(rdr : &mut GifReader, nb_entries : usize) -> Vec<RGB> {
     let ct_size : usize = nb_entries * 3;
     if rdr.bytes_left() < ct_size  {
-        panic!("Invalid GIF file: truncated color table");
+        eprintln!("Error: Imcomplete color table found.");
+        std::process::exit(1);
     }
     let mut ct : Vec<RGB> = vec![RGB { r: 0, g: 0, b: 0}; nb_entries as usize];
     for curr_elt_idx in 0..(nb_entries) {

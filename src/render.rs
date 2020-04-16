@@ -7,11 +7,14 @@ pub fn render_image(
     image_height : usize
 ) {
     let mut window = Window::new(
-        "GIF Displayer",
+        "GIF Renderer",
         image_width as usize,
         image_height as usize,
         WindowOptions::default(),
-    ).unwrap_or_else(|e| { panic!("{}", e); });
+    ).unwrap_or_else(|e| {
+        eprintln!("Error: Impossible to create a new window: {}", e);
+        std::process::exit(1);
+    });
 
     // Limit to max ~60 fps update rate
     window.limit_update_rate(Some(std::time::Duration::from_micros(16600)));
