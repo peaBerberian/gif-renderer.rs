@@ -1,2 +1,3 @@
 /target
 assets/*.gif
+!assets/large.gif
