@@ -1,6 +1,6 @@
 # gif-renderer #################################################################
 
-This is a simple GIF decoder written in Rust, compatible to both 87a and 89a GIF
+This is a GIF file decoder written in Rust, compatible to both 87a and 89a GIF
 versions.
 
 This tool should work as expected on Linux, Windows and macOS. Other platforms
@@ -22,34 +22,32 @@ gif-renderer images/some-gif-file.gif
 
 Yes!
 
-The huge majority of valid GIF files will be fully-rendered, and rarely
-encountered features like interlacing or the "restore to previous" disposal
-method should be well managed.
-
----
-
-There is still some room for improvement:
+The huge majority of valid GIF files will be fully-rendered instantly.
+Rarely encountered features like interlacing or the "restore to previous"
+disposal method should be well managed.
 
 --
 
-The GIF 89a "Plain Text Extension" is ignored when encountered in a GIF file.
+The only feature which has not been implemented is the "Plain Text Extension".
+When encountered, this extension is just ignored.
+This is because this feature is very (VERY) rarely used and is pretty hard to
+implement from scratch.
+As I encountered no GIF besides Plain Text Extension demos, with that feature,
+and that not even web browsers seem to handle it well, I figured it was the
+sensible thing to do to ignore it.
 
-Plain Text Extension support is hard to do, never used and even web browsers do
-not seem to handle it well.
 
-As such I considered that I can safely ignore it.
+## What's left to do? ##########################################################
 
---
+This tool works well and is pretty fast, but there is still some room for
+improvement:
 
-On the performance side, we're good but we could be better.
+  - The Plain Text Extension could be completely handled.
 
-For example, we begin rendering only when all images have been decoded.
-We could do it in a much more "streaming" manner, where the first frame is being
-rendered while the next one is still decoding.
+  - For now we render each frame once it has been completely decoded.
+    A nice improvement would be to be able to progressively display each pixels
+    as they are being decoded. This would rarely be useful though, and might
+    only be visible when either file access or LZW decoding is remarkably slow.
 
---
-
-Wrapping most parsing operation's return in a Rust's `Result` type seems the
-cleaner and idiomatic way to do it, but I'm under the impression that it incurs
-a small overhead that can amount to quite a few supplementary milliseconds for
-multi-MB files.
+  - Some errors could be ignored (e.g. ignoring when too much color data is
+    found instead of exiting) and logged.
