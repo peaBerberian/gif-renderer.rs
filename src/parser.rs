@@ -1,3 +1,5 @@
+use std::sync::mpsc;
+
 use crate::color::{self, RGB};
 use crate::decoder::LzwDecoder;
 use crate::errors::GifParsingError;
@@ -52,12 +54,21 @@ pub fn decode_and_render(rdr : &mut impl GifRead) -> Result<(), GifParsingError>
     // "disposal method" of the next frame encountered.
     let mut next_frame_base_buffer : Option<Vec<u32>> = None;
 
-    // Number of time the GIF should be looped according to the NETSCAPE2.0 Application
-    // extension. A value of `Some(0)` indicates that it should be looped forever.
-    let mut nb_loop : Option<u16> = None;
+    // Send every frame with its associated delay until the next frame.
+    // Send `None` when all frames have been communicated.
+    let (frame_tx, frame_rx) = mpsc::channel::<Option<(Vec<u32>, Option<u16>)>>();
 
-    // Store every frames and the corresponding delays to the next frame, if one.
-    let mut frames : Vec<(Vec<u32>, Option<u16>)> = vec![];
+    // Send the amount of looping according to the NETSCAPE2.0 extension.
+    // `Some(0)` means infinite looping.
+    // `None` means no looping. This is the value to send if no such extension is found.
+    let (nb_loop_tx, nb_loop_rx) = mpsc::channel::<Option<u16>>();
+
+    let ui_thread = render::create_rendering_thread(header.width as usize,
+                                                    header.height as usize,
+                                                    frame_rx,
+                                                    nb_loop_rx);
+
+    let mut found_loop_attribute = false;
 
     loop {
         match rdr.read_u8()? {
@@ -95,10 +106,23 @@ pub fn decode_and_render(rdr : &mut impl GifRead) -> Result<(), GifParsingError>
                         cloned_image_background,
                     _ => None,
                 };
-                frames.push((block, delay));
+                frame_tx.send(Some((block, delay))).unwrap_or_else(|e| {
+                    eprintln!("Error: Cannot send data to the rendering thread: {}", e);
+                    std::process::exit(1);
+                });
             }
             TRAILER_BLOCK_ID => {
-                render::render_image(&frames, nb_loop, header.width as usize, header.height as usize);
+                if !found_loop_attribute {
+                    nb_loop_tx.send(None).unwrap_or_else(|e| {
+                        eprintln!("Error: Cannot send data to the rendering thread: {}", e);
+                        std::process::exit(1);
+                    });
+                }
+                frame_tx.send(None).unwrap_or_else(|e| {
+                    eprintln!("Error: Cannot send data to the rendering thread: {}", e);
+                    std::process::exit(1);
+                });
+                break
             }
             EXTENSION_INTRODUCER_ID => {
                 match rdr.read_u8()? {
@@ -111,7 +135,11 @@ pub fn decode_and_render(rdr : &mut impl GifRead) -> Result<(), GifParsingError>
                         // Only NETSCAPE2.0 is parsed for now as looping is an essential feature
                         // (And I just don't want to set it to infinite by default)
                         if let ApplicationExtension::NetscapeLooping(x) = extension {
-                            nb_loop = Some(x);
+                            found_loop_attribute = true;
+                            nb_loop_tx.send(Some(x)).unwrap_or_else(|e| {
+                                eprintln!("Error: Cannot send data to the rendering thread: {}", e);
+                                std::process::exit(1);
+                            });
                         }
                     }
                     COMMENT_EXTENSION_LABEL => {
@@ -138,6 +166,11 @@ pub fn decode_and_render(rdr : &mut impl GifRead) -> Result<(), GifParsingError>
             }
         }
     }
+    ui_thread.join().unwrap_or_else(|_| {
+        eprintln!("Error: Could not communicate with the rendering thread.");
+        std::process::exit(1);
+    });
+    Ok(())
 }
 
 enum ApplicationExtension {
