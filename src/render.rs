@@ -30,7 +30,10 @@ pub fn render_image(
         let (curr_image, curr_delay) = &frames[img_idx];
         window
             .update_with_buffer(curr_image, image_width as usize, image_height as usize)
-            .unwrap();
+            .unwrap_or_else(|e| {
+                eprintln!("Error: Impossible to display the next frame: {}", e);
+                std::process::exit(1);
+            });
 
         match curr_delay {
             Some(delay) => std::thread::sleep(std::time::Duration::from_millis(10 * (*delay) as u64)),
