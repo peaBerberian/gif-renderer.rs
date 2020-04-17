@@ -49,8 +49,7 @@ rendered while the next one is still decoding.
 
 --
 
-In the same spirit, instead of putting the whole file into memory, we could read
-it in a more stream-like manner. This is not something really needed for most
-use cases because most GIF files are relatively small, but it could be useful
-for very large files or to where fetching the data is costly, like in a network
-context.
+Wrapping most parsing operation's return in a Rust's `Result` type seems the
+cleaner and idiomatic way to do it, but I'm under the impression that it incurs
+a small overhead that can amount to quite a few supplementary milliseconds for
+multi-MB files.

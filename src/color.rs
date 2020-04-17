@@ -1,4 +1,4 @@
-use crate::gif_reader::GifReader;
+use crate::gif_reader::GifRead;
 
 #[derive(Debug, Clone, Copy)]
 pub struct RGB {
@@ -32,19 +32,15 @@ impl Into<u32> for RGB {
 }
 
 // TODO use C repr to parse it more rapidly?
-pub fn parse_color_table(rdr : &mut GifReader, nb_entries : usize) -> Vec<RGB> {
-    let ct_size : usize = nb_entries * 3;
-    if rdr.bytes_left() < ct_size  {
-        eprintln!("Error: Imcomplete color table found.");
-        std::process::exit(1);
-    }
+pub fn parse_color_table(rdr : &mut impl GifRead, nb_entries : usize) -> Result<Vec<RGB>, std::io::Error> {
     let mut ct : Vec<RGB> = vec![RGB { r: 0, g: 0, b: 0}; nb_entries as usize];
     for curr_elt_idx in 0..(nb_entries) {
+        let colors = rdr.read_bytes(3)?;
         ct[curr_elt_idx as usize] = RGB {
-            r: rdr.read_u8(),
-            g: rdr.read_u8(),
-            b: rdr.read_u8(),
+            r: colors[0],
+            g: colors[1],
+            b: colors[2],
         };
     }
-    ct
+    Ok(ct)
 }
