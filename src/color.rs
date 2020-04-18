@@ -1,3 +1,4 @@
+use crate::error::Result;
 use crate::gif_reader::GifRead;
 
 #[derive(Debug, Clone, Copy)]
@@ -32,7 +33,7 @@ impl Into<u32> for RGB {
 }
 
 // TODO use C repr to parse it more rapidly?
-pub fn parse_color_table(rdr : &mut impl GifRead, nb_entries : usize) -> Result<Vec<RGB>, std::io::Error> {
+pub fn parse_color_table(rdr : &mut impl GifRead, nb_entries : usize) -> Result<Vec<RGB>> {
     let mut ct : Vec<RGB> = vec![RGB { r: 0, g: 0, b: 0}; nb_entries as usize];
     for curr_elt_idx in 0..(nb_entries) {
         let colors = rdr.read_bytes(3)?;

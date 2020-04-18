@@ -2,7 +2,7 @@ use std::sync::mpsc;
 
 use crate::color::{self, RGB};
 use crate::decoder::LzwDecoder;
-use crate::errors::GifParsingError;
+use crate::error::{GifParsingError, Result};
 use crate::gif_reader::{GifRead, GifReaderStringError};
 use crate::render;
 
@@ -30,7 +30,7 @@ const PLAIN_TEXT_EXTENSION_LABEL : u8 = 0x01;
 /// Background color used when none is defined.
 const DEFAULT_BACKGROUND_COLOR : u32 = 0x00FF_FFFF;
 
-pub fn decode_and_render(rdr : &mut impl GifRead) -> Result<(), GifParsingError> {
+pub fn decode_and_render(rdr : &mut impl GifRead) -> Result<()> {
     let header = parse_header(rdr)?;
 
     let (background_color, global_color_table) =
@@ -184,7 +184,7 @@ enum ApplicationExtension {
 /// Allows to skip sub-blocks when reached. You might want to do that when
 /// reaching a part of the GIF buffer containing sub-blocks you don't care for
 /// (e.g. comments).
-fn skip_sub_blocks(rdr : &mut impl GifRead) -> Result<(), GifParsingError> {
+fn skip_sub_blocks(rdr : &mut impl GifRead) -> Result<()> {
     loop {
         let size_of_block = rdr.read_u8()? as usize;
         if size_of_block == 0 {
@@ -198,7 +198,7 @@ fn skip_sub_blocks(rdr : &mut impl GifRead) -> Result<(), GifParsingError> {
 /// GIF image. This feature seems to be very rarely used, we can safely ignore
 /// it for now.
 /// TODO?
-fn skip_plain_text_extension(rdr : &mut impl GifRead) -> Result<(), GifParsingError> {
+fn skip_plain_text_extension(rdr : &mut impl GifRead) -> Result<()> {
     let block_size = rdr.read_u8()?;
     if block_size != 12 {
         return Err(GifParsingError::UnexpectedLength {
@@ -212,7 +212,7 @@ fn skip_plain_text_extension(rdr : &mut impl GifRead) -> Result<(), GifParsingEr
     Ok(())
 }
 
-fn parse_application_extension(rdr : &mut impl GifRead) -> Result<ApplicationExtension, GifParsingError> {
+fn parse_application_extension(rdr : &mut impl GifRead) -> Result<ApplicationExtension> {
     let block_size = rdr.read_u8()?;
     if block_size != 11 {
         return Err(GifParsingError::UnexpectedLength {
@@ -314,7 +314,7 @@ struct GraphicControlExtension {
 
 fn parse_graphic_control_extension(
     rdr : &mut impl GifRead
-) -> Result<GraphicControlExtension, GifParsingError> {
+) -> Result<GraphicControlExtension> {
     let block_size = rdr.read_u8()? as usize;
 
     if block_size != 4 {
@@ -361,7 +361,7 @@ fn construct_next_frame(
     img_width : u16,
     background_color : Option<RGB>,
     transparent_color_index : Option<u8>
-) -> Result<Vec<u32>, GifParsingError> {
+) -> Result<Vec<u32>> {
     let curr_block_left = rdr.read_u16()?;
     let curr_block_top = rdr.read_u16()?;
     let curr_block_width = rdr.read_u16()?;
@@ -484,7 +484,7 @@ struct GifHeader {
 }
 
 /// Parse Header part of a GIF buffer and the Global Color Table, if one.
-fn parse_header(rdr : &mut impl GifRead) -> Result<GifHeader, GifParsingError> {
+fn parse_header(rdr : &mut impl GifRead) -> Result<GifHeader> {
     match rdr.read_str(3) {
         Err(GifReaderStringError::FromUtf8Error(_)) => {
             return Err(GifParsingError::NoGIFHeader);

@@ -1,6 +1,6 @@
 mod color;
 mod decoder;
-mod errors;
+mod error;
 mod gif_reader;
 mod parser;
 mod render;

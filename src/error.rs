@@ -1,3 +1,7 @@
+use std::{error, fmt};
+
+pub type Result<T> = ::std::result::Result<T, GifParsingError>;
+
 #[derive(Debug)]
 pub enum GifParsingError {
     IOError(std::io::Error),
@@ -27,8 +31,23 @@ impl From<std::io::Error> for GifParsingError {
     }
 }
 
-use std::{error, fmt};
-impl error::Error for GifParsingError {}
+impl error::Error for GifParsingError {
+    fn cause(&self) -> Option<&dyn ::std::error::Error> {
+        match *self {
+            GifParsingError::IOError(ref e) => Some(e),
+            GifParsingError::NoGIFHeader => None,
+            GifParsingError::UnsupportedVersion(_) => None,
+            GifParsingError::UnexpectedLength { .. } => None,
+            GifParsingError::ExpectedBlockTerminator { .. } => None,
+            GifParsingError::InvalidColor => None,
+            GifParsingError::TooMuchPixels => None,
+            GifParsingError::NoColorTable => None,
+            GifParsingError::UnrecognizedExtension(_) => None,
+            GifParsingError::UnrecognizedBlock { .. } => None,
+        }
+    }
+}
+
 impl fmt::Display for GifParsingError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match &*self {
