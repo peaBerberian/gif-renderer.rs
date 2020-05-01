@@ -51,11 +51,11 @@ pub fn parse_color_table(rdr : &mut impl GifRead, nb_entries : usize) -> Result<
     // New implementation: Directly transmute the read GIF color table into
     // ours, as they should be in the same format.
     let raw_color_table = rdr.read_bytes(nb_entries * 3)?;
-    let (ptr, len, _) = raw_color_table.into_raw_parts();
+    let (ptr, len, cap) = raw_color_table.into_raw_parts();
 
     let ct = unsafe {
         let ptr = ptr as *mut RGB;
-        Vec::from_raw_parts(ptr, len, len)
+        Vec::from_raw_parts(ptr, len, cap)
     };
     Ok(ct)
 }
