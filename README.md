@@ -8,6 +8,9 @@ might be supported. To display the decoded buffer, this tool relies on the
 [minifb](https://github.com/emoon/rust_minifb) crate - a fairly minimalist
 cross-platform window creator.
 
+Please note that it needs nightly Rust to be built, as it make use of the
+`vec_into_raw_parts` feature.
+
 
 ## How to use it? ##############################################################
 
