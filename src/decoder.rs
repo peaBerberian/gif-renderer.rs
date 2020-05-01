@@ -118,7 +118,7 @@ impl LzwDictionary {
             curr_code_size: min_code_size + 1,
             table,
         };
-        dict.clear(); // TODO necessary?
+        dict.clear();
         dict
     }
 
