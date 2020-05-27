@@ -92,11 +92,14 @@ impl GlRenderer {
             gl::GenTextures(1, &mut texture);
             gl::BindTexture(gl::TEXTURE_2D, texture);
             // set the texture wrapping parameters
-            gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_WRAP_S, gl::REPEAT as i32);
-            gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_WRAP_T, gl::REPEAT as i32);
+            gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_WRAP_S, gl::CLAMP_TO_EDGE as i32);
+            gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_WRAP_T, gl::CLAMP_TO_EDGE as i32);
+
             // set texture filtering parameters
-            gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MIN_FILTER, gl::NEAREST as i32);
-            gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MAG_FILTER, gl::NEAREST as i32);
+            gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MIN_FILTER, gl::LINEAR as i32);
+            gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MAG_FILTER, gl::LINEAR as i32);
+            // gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MIN_FILTER, gl::NEAREST as i32);
+            // gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MAG_FILTER, gl::NEAREST as i32);
             clear_gl_color();
 
             (gl_program, vbo, vao, ebo, texture)
@@ -124,20 +127,20 @@ impl GlRenderer {
         self.window.refresh();
     }
 
-    pub unsafe fn draw(&self, data : &[u8]) {
+    pub unsafe fn draw(&self, data : &[u32]) {
         clear_gl_color();
         // let window_size = self.window.get_inner_size();
         gl::TexImage2D(gl::TEXTURE_2D,
             0,
-            gl::RGB as i32,
+            gl::RGBA as i32,
             self.window.base_width as i32,
             self.window.base_height as i32,
             // window_size.width as i32,
             // window_size.height as i32,
             0,
-            gl::RGB,
+            gl::RGBA,
             gl::UNSIGNED_BYTE,
-            &data[0] as *const u8 as *const c_void);
+            &data[0] as *const u32 as *const c_void);
 
         gl::BindTexture(gl::TEXTURE_2D, self.texture);
 

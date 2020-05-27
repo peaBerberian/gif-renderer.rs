@@ -19,7 +19,7 @@ pub enum GifEvent {
     LoopingInfo(Option<u16>),
 
     /// Information about the next frame is available
-    GifFrameData { data : Vec<u8>, delay_until_next : Option<u16> },
+    GifFrameData { data : Vec<u32>, delay_until_next : Option<u16> },
 
     /// All frames have been communicated
     GifFrameEnd,
@@ -66,7 +66,7 @@ impl EventLoop {
 
         // Store every frames and the corresponding delays to the next frame, if one.
         // This will be needed if the GIF has to loop
-        let mut frames : Vec<(Vec<u8>, Option<u16>)> = vec![];
+        let mut frames : Vec<(Vec<u32>, Option<u16>)> = vec![];
         let mut current_delay : Option<u16> = Some(0);
         let mut curr_frame_idx = 0;
         let mut no_more_frame = false;
@@ -89,8 +89,7 @@ impl EventLoop {
                             return;
                         }
                     },
-                    WindowEvent::Resized(new_size) => {
-                        println!("{:?}", new_size);
+                    WindowEvent::Resized(_) => {
                         if curr_frame_idx < frames.len() {
                             unsafe { renderer.draw(&frames[curr_frame_idx].0); }
                         }
@@ -116,11 +115,9 @@ impl EventLoop {
 
             let now = time::Instant::now();
             match current_delay {
-                None => {
-                    return;
-                },
+                None => {},
                 Some(delay) => {
-                    if frames.len() == 0 {
+                    if frames.is_empty() {
                         return;
                     }
                     let delay_dur = time::Duration::from_millis(10 * delay as u64);
@@ -137,11 +134,11 @@ impl EventLoop {
                                     return;
                                 },
                                 Some(x) => {
-                                    if x == 1 {
-                                        loop_left = None;
-                                    } else if x > 1 {
-                                        loop_left = Some(x - 1);
-                                    }
+                                    match x {
+                                        0 => { /* Infinite looping, do nothing. */ },
+                                        1 => { loop_left = None; }
+                                        x => { loop_left = Some(x - 1); }
+                                    };
                                     unsafe { renderer.draw(&frames[0].0); }
                                     current_delay = frames[0].1;
                                     curr_frame_idx = 1;

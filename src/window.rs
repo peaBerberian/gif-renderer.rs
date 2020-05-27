@@ -15,7 +15,6 @@ impl Window {
     /// This window won't display anything by itself, you will need to use a
     /// separate rendering logic to do that.
     pub fn new(event_loop : &EventLoop, width : u16, height : u16) -> Window {
-        println!("HAHAH {} {}", width, height);
         let window = create_window(width as f32, height as f32, &event_loop);
         Window { windowed_context : window, base_width : width, base_height : height }
     }
@@ -59,10 +58,9 @@ fn create_window(
         .build_windowed(wb, event_loop.glutin_event_loop())
         .expect("Could not build the window.");
 
-    let windowed_context = unsafe {
+    unsafe {
         windowed_context
             .make_current()
             .expect("Failed to make current context.")
-    };
-    windowed_context
+    }
 }

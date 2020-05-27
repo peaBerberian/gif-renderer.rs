@@ -2,8 +2,7 @@ use crate::color::{self, RGB};
 use crate::decoder::LzwDecoder;
 use crate::error::{GifParsingError, Result};
 use crate::event_loop::{ EventLoopProxy, GifEvent };
-use crate::gif_reader::GifRead;
-use crate::header::GifHeader;
+use crate::gif_reader::{GifRead, GifReaderStringError};
 
 /// GIF block ID for the "Image Descriptor".
 const IMAGE_DESCRIPTOR_BLOCK_ID : u8 = 0x2C;
@@ -27,7 +26,7 @@ const COMMENT_EXTENSION_LABEL : u8 = 0xFE;
 const PLAIN_TEXT_EXTENSION_LABEL : u8 = 0x01;
 
 /// Background color used when none is defined.
-const DEFAULT_BACKGROUND_COLOR : RGB = RGB { r: 0xFF, g: 0xFF, b: 0xFF };
+const DEFAULT_BACKGROUND_COLOR : u32 = 0xFFFF_FFFF;
 
 pub fn decode_and_render(
     rdr : &mut impl GifRead,
@@ -53,7 +52,7 @@ pub fn decode_and_render(
 
     // Background for the next frame encountered. Its content depends on the
     // "disposal method" of the next frame encountered.
-    let mut next_frame_base_buffer : Option<Vec<u8>> = None;
+    let mut next_frame_base_buffer : Option<Vec<u32>> = None;
 
     let mut found_loop_attribute = false;
 
@@ -343,12 +342,12 @@ fn parse_graphic_control_extension(
 fn construct_next_frame(
     rdr : &mut impl GifRead,
     global_color_table : &Option<&[RGB]>,
-    base_buffer : Option<Vec<u8>>,
+    base_buffer : Option<Vec<u32>>,
     img_height : u16,
     img_width : u16,
     background_color : Option<RGB>,
     transparent_color_index : Option<u8>
-) -> Result<Vec<u8>> {
+) -> Result<Vec<u32>> {
     let curr_block_left = rdr.read_u16()?;
     let curr_block_top = rdr.read_u16()?;
     let curr_block_width = rdr.read_u16()?;
@@ -390,25 +389,18 @@ fn construct_next_frame(
 
     let (has_background_frame, mut global_buffer) = match base_buffer {
         Some(frame) => (true, frame),
-        None => (false, vec![0; img_height as usize * img_width as usize * 3]),
+        None => (false, vec![0; img_height as usize * img_width as usize]),
     };
 
     let initial_code_size = rdr.read_u8()?;
     let mut decoder = LzwDecoder::new(initial_code_size);
 
     if curr_block_width == 0 || curr_block_height == 0 {
-        let bg_color : RGB = match background_color {
-            Some(color) => color,
+        let bg_color : u32 = match background_color {
+            Some(color) => color.into(),
             None => DEFAULT_BACKGROUND_COLOR,
         };
-        let elts = img_height as usize * img_width as usize;
-        let mut ret : Vec<u8> = Vec::with_capacity(elts * 3);
-        for _ in 0..elts {
-            ret.push(bg_color.r);
-            ret.push(bg_color.g);
-            ret.push(bg_color.b);
-        }
-        return Ok(ret);
+        return Ok(vec![bg_color; img_height as usize * img_width as usize]);
     }
 
     let mut x_pos : usize = curr_block_left as usize;
@@ -426,32 +418,24 @@ fn construct_next_frame(
                 if elt as usize >= current_color_table.len() {
                     return Err(GifParsingError::InvalidColor);
                 }
-
-                let curr_buffer_idx = ((y_pos * img_width as usize) + x_pos) * 3;
-                if (curr_buffer_idx + 2) >= global_buffer.len() {
+                let pos = (y_pos * img_width as usize) + x_pos;
+                if pos >= global_buffer.len() {
                     return Err(GifParsingError::TooMuchPixels);
                 }
-                match transparent_color_index {
+                let pix_val : u32 = match transparent_color_index {
                     Some(t_idx) if t_idx == elt => { // transparent color
-                        if !has_background_frame {
-                            let color : RGB = match background_color {
-                                Some(c) => c,
+                        if has_background_frame {
+                            global_buffer[pos] // do not change anything
+                        } else {
+                            match background_color {
+                                Some(c) => c.into(),
                                 None => DEFAULT_BACKGROUND_COLOR,
-                            };
-
-                            global_buffer[curr_buffer_idx] = color.r;
-                            global_buffer[curr_buffer_idx + 1] = color.g;
-                            global_buffer[curr_buffer_idx + 2] = color.b;
+                            }
                         }
-                    }
-                    _ => {
-                        let color : RGB = current_color_table[elt as usize];
-                        global_buffer[curr_buffer_idx] = color.r;
-                        global_buffer[curr_buffer_idx + 1] = color.g;
-                        global_buffer[curr_buffer_idx + 2] = color.b;
-                    }
-                }
-
+                    },
+                    _ => (&current_color_table[elt as usize]).into(),
+                };
+                global_buffer[pos] = pix_val;
                 x_pos += 1;
                 if x_pos > max_pos_width {
                     y_pos += line_step;
@@ -474,4 +458,72 @@ fn construct_next_frame(
             }
         }
     }
+}
+
+#[derive(Debug)]
+pub struct GifHeader {
+   pub width : u16,
+   pub height : u16,
+   pub nb_color_resolution_bits : u8,
+   pub is_table_sorted : bool,
+   pub background_color_index : u8,
+   pub pixel_aspect_ratio : u8,
+   pub global_color_table : Option<Vec<RGB>>,
+}
+
+/// Parse Header part of a GIF buffer and the Global Color Table, if one.
+pub fn parse_header(rdr : &mut impl GifRead) -> Result<GifHeader> {
+    match rdr.read_str(3) {
+        Err(GifReaderStringError::FromUtf8Error(_)) => {
+            return Err(GifParsingError::NoGIFHeader);
+        },
+        Ok(x) if x != "GIF" => {
+            return Err(GifParsingError::NoGIFHeader);
+        },
+        Err(GifReaderStringError::IOError(x)) => {
+            return Err(GifParsingError::IOError(x));
+        }
+        Ok(_) => {}
+    };
+
+    match rdr.read_str(3) {
+        Err(GifReaderStringError::FromUtf8Error(_)) => {
+            return Err(GifParsingError::UnsupportedVersion(None));
+        },
+        Ok(v) if v != "89a" && v != "87a" => {
+            return Err(GifParsingError::UnsupportedVersion(Some(v)));
+        },
+        Err(GifReaderStringError::IOError(x)) => {
+            return Err(GifParsingError::IOError(x));
+        }
+        Ok(_) => {}
+    };
+
+    let width = rdr.read_u16()?;
+    let height = rdr.read_u16()?;
+
+    let field = rdr.read_u8()?;
+    let has_global_color_table = field & 0x80 != 0;
+    let nb_color_resolution_bits = ((field & 0x70) >> 4) + 1;
+    let is_table_sorted = field & 0x08 != 0;
+    let nb_entries : usize = 1 << ((field & 0x07) + 1);
+
+    let background_color_index = rdr.read_u8()?;
+    let pixel_aspect_ratio = rdr.read_u8()?;
+
+    let global_color_table = if has_global_color_table {
+        Some(color::parse_color_table(rdr, nb_entries)?)
+    } else {
+        None
+    };
+
+    Ok(GifHeader {
+        width,
+        height,
+        nb_color_resolution_bits,
+        is_table_sorted,
+        background_color_index,
+        pixel_aspect_ratio,
+        global_color_table,
+    })
 }

@@ -4,7 +4,6 @@ mod decoder;
 mod error;
 mod event_loop;
 mod gif_reader;
-mod header;
 mod open_gl;
 mod parser;
 mod window;
@@ -25,7 +24,7 @@ fn main() {
 
     // 2 - parse GIF header to check validity and obtain dimensions
     let mut rdr = GifReader::new(std::io::BufReader::new(f));
-    let header = header::parse_header(&mut rdr).unwrap_or_else(|err| {
+    let header = parser::parse_header(&mut rdr).unwrap_or_else(|err| {
         eprintln!("Error while parsing the GIF header: {}", err);
         std::process::exit(1);
     });
