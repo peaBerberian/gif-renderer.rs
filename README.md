@@ -4,9 +4,9 @@ This is a GIF file decoder written in Rust, compatible to both 87a and 89a GIF
 versions.
 
 This tool should work as expected on Linux, Windows and macOS. Other platforms
-might be supported. To display the decoded buffer, this tool relies on the
-[minifb](https://github.com/emoon/rust_minifb) crate - a fairly minimalist
-cross-platform window creator.
+might be supported. The most platform-sensitive code is on the rendering side:
+This tool relies on the `glutin` crate for OpenGL context creation and the `gl`
+crate for openGL bindings.
 
 Please note that it needs nightly Rust to be built, as it make use of the
 `vec_into_raw_parts` feature.

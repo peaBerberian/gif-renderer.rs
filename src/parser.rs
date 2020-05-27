@@ -1,10 +1,8 @@
-use std::sync::mpsc;
-
 use crate::color::{self, RGB};
 use crate::decoder::LzwDecoder;
 use crate::error::{GifParsingError, Result};
+use crate::event_loop::{ EventLoopProxy, GifEvent };
 use crate::gif_reader::{GifRead, GifReaderStringError};
-use crate::render;
 
 /// GIF block ID for the "Image Descriptor".
 const IMAGE_DESCRIPTOR_BLOCK_ID : u8 = 0x2C;
@@ -28,11 +26,13 @@ const COMMENT_EXTENSION_LABEL : u8 = 0xFE;
 const PLAIN_TEXT_EXTENSION_LABEL : u8 = 0x01;
 
 /// Background color used when none is defined.
-const DEFAULT_BACKGROUND_COLOR : u32 = 0x00FF_FFFF;
+const DEFAULT_BACKGROUND_COLOR : u32 = 0xFFFF_FFFF;
 
-pub fn decode_and_render(rdr : &mut impl GifRead) -> Result<()> {
-    let header = parse_header(rdr)?;
-
+pub fn decode(
+    rdr : &mut impl GifRead,
+    header : &GifHeader,
+    el_proxy : EventLoopProxy
+) -> Result<()> {
     let (background_color, global_color_table) =
         if let Some(gct) = &header.global_color_table {
             let index = header.background_color_index as usize;
@@ -54,20 +54,6 @@ pub fn decode_and_render(rdr : &mut impl GifRead) -> Result<()> {
     // "disposal method" of the next frame encountered.
     let mut next_frame_base_buffer : Option<Vec<u32>> = None;
 
-    // Send every frame with its associated delay until the next frame.
-    // Send `None` when all frames have been communicated.
-    let (frame_tx, frame_rx) = mpsc::channel::<Option<(Vec<u32>, Option<u16>)>>();
-
-    // Send the amount of looping according to the NETSCAPE2.0 extension.
-    // `Some(0)` means infinite looping.
-    // `None` means no looping. This is the value to send if no such extension is found.
-    let (nb_loop_tx, nb_loop_rx) = mpsc::channel::<Option<u16>>();
-
-    let ui_thread = render::create_rendering_thread(header.width as usize,
-                                                    header.height as usize,
-                                                    frame_rx,
-                                                    nb_loop_rx);
-
     let mut found_loop_attribute = false;
 
     loop {
@@ -80,20 +66,21 @@ pub fn decode_and_render(rdr : &mut impl GifRead) -> Result<()> {
 
                 // The "RestoreToPrevious" disposal method forces us to keep the current base
                 // buffer for the frame coming after that one.
-                use DisposalMethod::{*};
+                use DisposalMethod::*;
                 let cloned_image_background = match last_graphic_ext {
                     Some(GraphicControlExtension { disposal_method: RestoreToPrevious, .. }) =>
                         next_frame_base_buffer.clone(),
                     _ => None
                 };
 
-                let block = construct_next_frame(rdr,
-                                                 &global_color_table,
-                                                 next_frame_base_buffer,
-                                                 header.height,
-                                                 header.width,
-                                                 background_color,
-                                                 transparent_color_index)?;
+                let block = construct_next_frame(
+                    rdr,
+                    &global_color_table,
+                    next_frame_base_buffer,
+                    header.height,
+                    header.width,
+                    background_color,
+                    transparent_color_index)?;
 
                 // Obtain the base buffer for the next frame according to the current disposal
                 // method
@@ -106,20 +93,23 @@ pub fn decode_and_render(rdr : &mut impl GifRead) -> Result<()> {
                         cloned_image_background,
                     _ => None,
                 };
-                frame_tx.send(Some((block, delay))).unwrap_or_else(|e| {
-                    eprintln!("Error: Cannot send data to the rendering thread: {}", e);
+                el_proxy.send_event(GifEvent::GifFrameData {
+                    data: block,
+                    delay_until_next: delay,
+                }).unwrap_or_else(|err| {
+                    eprintln!("Error: Impossible to communicate a new decoded frame: {}", err);
                     std::process::exit(1);
                 });
             }
             TRAILER_BLOCK_ID => {
                 if !found_loop_attribute {
-                    nb_loop_tx.send(None).unwrap_or_else(|e| {
-                        eprintln!("Error: Cannot send data to the rendering thread: {}", e);
+                    el_proxy.send_event(GifEvent::LoopingInfo(None)).unwrap_or_else(|err| {
+                        eprintln!("Error: Impossible to communicate absence of looping information: {}", err);
                         std::process::exit(1);
                     });
                 }
-                frame_tx.send(None).unwrap_or_else(|e| {
-                    eprintln!("Error: Cannot send data to the rendering thread: {}", e);
+                el_proxy.send_event(GifEvent::GifFrameEnd).unwrap_or_else(|err| {
+                    eprintln!("Error: Impossible to communicate the end of decoded frames: {}", err);
                     std::process::exit(1);
                 });
                 break
@@ -136,8 +126,8 @@ pub fn decode_and_render(rdr : &mut impl GifRead) -> Result<()> {
                         // (And I just don't want to set it to infinite by default)
                         if let ApplicationExtension::NetscapeLooping(x) = extension {
                             found_loop_attribute = true;
-                            nb_loop_tx.send(Some(x)).unwrap_or_else(|e| {
-                                eprintln!("Error: Cannot send data to the rendering thread: {}", e);
+                            el_proxy.send_event(GifEvent::LoopingInfo(Some(x))).unwrap_or_else(|err| {
+                                eprintln!("Error: Impossible to communicate looping information: {}", err);
                                 std::process::exit(1);
                             });
                         }
@@ -166,10 +156,6 @@ pub fn decode_and_render(rdr : &mut impl GifRead) -> Result<()> {
             }
         }
     }
-    ui_thread.join().unwrap_or_else(|_| {
-        eprintln!("Error: Could not communicate with the rendering thread.");
-        std::process::exit(1);
-    });
     Ok(())
 }
 
@@ -386,7 +372,9 @@ fn construct_next_frame(
 
     let lct = if has_local_color_table {
         Some(color::parse_color_table(rdr, nb_color_entries)?)
-    } else { None };
+    } else {
+        None
+    };
 
     let current_color_table : &[RGB] = if let Some(c) = &lct {
         c
@@ -435,7 +423,7 @@ fn construct_next_frame(
                     return Err(GifParsingError::TooMuchPixels);
                 }
                 let pix_val : u32 = match transparent_color_index {
-                    Some(t_idx) if t_idx == elt => {
+                    Some(t_idx) if t_idx == elt => { // transparent color
                         if has_background_frame {
                             global_buffer[pos] // do not change anything
                         } else {
@@ -473,18 +461,18 @@ fn construct_next_frame(
 }
 
 #[derive(Debug)]
-struct GifHeader {
-    width : u16,
-    height : u16,
-    nb_color_resolution_bits : u8,
-    is_table_sorted : bool,
-    background_color_index : u8,
-    pixel_aspect_ratio : u8,
-    global_color_table : Option<Vec<RGB>>,
+pub struct GifHeader {
+   pub width : u16,
+   pub height : u16,
+   pub nb_color_resolution_bits : u8,
+   pub is_table_sorted : bool,
+   pub background_color_index : u8,
+   pub pixel_aspect_ratio : u8,
+   pub global_color_table : Option<Vec<RGB>>,
 }
 
 /// Parse Header part of a GIF buffer and the Global Color Table, if one.
-fn parse_header(rdr : &mut impl GifRead) -> Result<GifHeader> {
+pub fn parse_header(rdr : &mut impl GifRead) -> Result<GifHeader> {
     match rdr.read_str(3) {
         Err(GifReaderStringError::FromUtf8Error(_)) => {
             return Err(GifParsingError::NoGIFHeader);
