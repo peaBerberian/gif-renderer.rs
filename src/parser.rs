@@ -28,7 +28,7 @@ const PLAIN_TEXT_EXTENSION_LABEL : u8 = 0x01;
 /// Background color used when none is defined.
 const DEFAULT_BACKGROUND_COLOR : u32 = 0xFFFF_FFFF;
 
-pub fn decode_and_render(
+pub fn decode(
     rdr : &mut impl GifRead,
     header : &GifHeader,
     el_proxy : EventLoopProxy

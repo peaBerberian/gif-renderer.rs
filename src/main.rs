@@ -37,8 +37,8 @@ fn main() {
 
     // 4 - decode GIF in another thread
     std::thread::spawn(move || {
-        if let Err(x) = parser::decode_and_render(&mut rdr, &header, proxy) {
-            eprintln!("Error: {}", x);
+        if let Err(x) = parser::decode(&mut rdr, &header, proxy) {
+            eprintln!("Error while decoding: {}", x);
             std::process::exit(1);
         }
     });
