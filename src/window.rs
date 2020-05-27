@@ -50,7 +50,6 @@ fn create_window(
 ) -> WindowedContext<glutin::PossiblyCurrent> {
     let wb = glutin::window::WindowBuilder::new()
         .with_title(WINDOW_TITLE)
-        .with_resizable(false)
         .with_inner_size(glutin::dpi::LogicalSize::new(width, height));
 
     let windowed_context = glutin::ContextBuilder::new()

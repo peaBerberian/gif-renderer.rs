@@ -89,15 +89,17 @@ impl EventLoop {
                             return;
                         }
                     },
-                    WindowEvent::Resized(_) => {
-                        if curr_frame_idx < frames.len() {
-                            unsafe { renderer.draw(&frames[curr_frame_idx].0); }
+                    WindowEvent::Resized(size) => {
+                        unsafe {
+                            renderer.resize(size.width, size.height);
                         }
                     },
                     _ => return,
                 },
                 Event::RedrawRequested {..} => {
-                    unsafe { renderer.redraw(); }
+                    if curr_frame_idx < frames.len() {
+                        unsafe { renderer.redraw(); }
+                    }
                 }
                 Event::UserEvent(ev) => {
                     match ev {

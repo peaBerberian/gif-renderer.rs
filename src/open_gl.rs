@@ -127,6 +127,30 @@ impl GlRenderer {
         self.window.refresh();
     }
 
+    pub unsafe fn resize(&self, width : u32, height : u32) {
+        let (initial_width, initial_height) = (
+            self.window.base_width as f64,
+            self.window.base_height as f64);
+        let initial_ratio = initial_width / initial_height;
+        let new_ratio = width as f64 / height as f64;
+        if new_ratio == initial_ratio {
+            gl::Viewport(0, 0, width as i32, height as i32);
+        } else if new_ratio > initial_ratio {
+            // bigger width
+            let new_height = height as f64;
+            let new_width = initial_ratio * new_height;
+            let width_offset = (width as f64 - new_width) / 2.0;
+            gl::Viewport(width_offset as i32, 0, new_width as i32, new_height as i32);
+        } else {
+            // bigger height
+            let new_width = width as f64;
+            let new_height = new_width / initial_ratio;
+            let height_offset = (height as f64 - new_height) / 2.0;
+            gl::Viewport(0, height_offset as i32, new_width as i32, new_height as i32);
+        }
+        self.redraw();
+    }
+
     pub unsafe fn draw(&self, data : &[u32]) {
         clear_gl_color();
         // let window_size = self.window.get_inner_size();
