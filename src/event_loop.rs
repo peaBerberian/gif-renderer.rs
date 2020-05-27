@@ -9,6 +9,7 @@ use glutin::{
 };
 use crate::open_gl::GlRenderer;
 
+/// Events that can be sent to the EventLoop.
 #[derive(Debug)]
 pub enum GifEvent {
     /// Information about the number of time the GIF image should loop is

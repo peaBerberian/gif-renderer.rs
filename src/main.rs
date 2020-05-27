@@ -30,6 +30,8 @@ fn main() {
     });
 
     // 3 - Initialize window and rendering loop
+    // TODO there might be too much steps here, we could reduce them as there
+    // is only one type of renderer, event loop and window.
     let el = event_loop::EventLoop::new();
     let window = window::Window::new(&el, header.width, header.height);
     let renderer = open_gl::GlRenderer::new(window);

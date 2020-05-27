@@ -6,6 +6,9 @@ use gl::types::*;
 
 use crate::window::Window;
 
+/// Very simple vertex shader used here.
+/// Just gives the position and reverse the y axis of the texture (as we
+/// go for top-to-bottom where openGL is bottom-to-top).
 const VERTEX_SHADER : &str = r#"#version 330 core
 layout (location = 0) in vec3 aPos;
 layout (location = 1) in vec2 aTexCoord;
@@ -17,6 +20,10 @@ void main()
     gl_Position = vec4(aPos, 1.0);
     TexCoord = vec2(aTexCoord.x, 1.0 - aTexCoord.y);
 }"#;
+
+/// Very simple fragment shader used here.
+/// Just gives the position and reverse the y axis of the texture (as we
+/// go for top-to-bottom where openGL is bottom-to-top).
 const FRAGMENT_SHADER : &str = r#"#version 330 core
 out vec4 FragColor;
 
@@ -29,6 +36,9 @@ void main()
     FragColor = texture(texture1, TexCoord);
 }"#;
 
+/// OpenGL renderer.
+/// This struct allows to use openGL logic to render the GIF as a texture in the
+/// given Window context.
 pub struct GlRenderer {
     program : GlProgram,
     vao : GLuint,
@@ -37,6 +47,8 @@ pub struct GlRenderer {
 }
 
 impl GlRenderer {
+    /// Create a new renderer associated to the given Window context.
+    /// This also initializes the openGL logic.
     pub fn new(window : Window) -> GlRenderer {
         gl::load_with(|symbol| window.windowed_context.get_proc_address(symbol) as *const _);
 
@@ -113,44 +125,10 @@ impl GlRenderer {
         }
     }
 
-//     /// Change the dimensions of the window
-//     pub fn update_window_size(&self, width : u32, height : u32) {
-//         self.window.update_window_size(width, height);
-//     }
-
-    pub unsafe fn redraw(&self) {
-        clear_gl_color();
-        gl::BindTexture(gl::TEXTURE_2D, self.texture);
-        self.program.use_program();
-        gl::BindVertexArray(self.vao);
-        gl::DrawElements(gl::TRIANGLES, 6, gl::UNSIGNED_INT, ptr::null());
-        self.window.refresh();
-    }
-
-    pub unsafe fn resize(&self, width : u32, height : u32) {
-        let (initial_width, initial_height) = (
-            self.window.base_width as f64,
-            self.window.base_height as f64);
-        let initial_ratio = initial_width / initial_height;
-        let new_ratio = width as f64 / height as f64;
-        if new_ratio == initial_ratio {
-            gl::Viewport(0, 0, width as i32, height as i32);
-        } else if new_ratio > initial_ratio {
-            // bigger width
-            let new_height = height as f64;
-            let new_width = initial_ratio * new_height;
-            let width_offset = (width as f64 - new_width) / 2.0;
-            gl::Viewport(width_offset as i32, 0, new_width as i32, new_height as i32);
-        } else {
-            // bigger height
-            let new_width = width as f64;
-            let new_height = new_width / initial_ratio;
-            let height_offset = (height as f64 - new_height) / 2.0;
-            gl::Viewport(0, height_offset as i32, new_width as i32, new_height as i32);
-        }
-        self.redraw();
-    }
-
+    /// Draw a given frame on the screen (and refresh the window).
+    /// The data given should have the same size than
+    /// `self.window.base_width * self.window.base_height` and should represent
+    /// all RGBA pixels as a `u32` value.
     pub unsafe fn draw(&self, data : &[u32]) {
         clear_gl_color();
         // let window_size = self.window.get_inner_size();
@@ -174,8 +152,49 @@ impl GlRenderer {
         gl::DrawElements(gl::TRIANGLES, 6, gl::UNSIGNED_INT, ptr::null());
         self.window.refresh();
     }
+
+    /// Refresh what was last drawn on the window.
+    /// This method will perform less heavy calculation than `draw` and will
+    /// re-use directly the last data given to it (if it exists).
+    pub unsafe fn redraw(&self) {
+        clear_gl_color();
+        gl::BindTexture(gl::TEXTURE_2D, self.texture);
+        self.program.use_program();
+        gl::BindVertexArray(self.vao);
+        gl::DrawElements(gl::TRIANGLES, 6, gl::UNSIGNED_INT, ptr::null());
+        self.window.refresh();
+    }
+
+    /// Resize the window's content, while conserving the same aspect ratio (and
+    /// centering the image if it needs to).
+    /// This method will also refresh the window directly.
+    pub unsafe fn resize(&self, width : u32, height : u32) {
+        const EPSILON : f64 = 0.001;
+        let (initial_width, initial_height) = (
+            self.window.base_width as f64,
+            self.window.base_height as f64);
+        let initial_ratio = initial_width / initial_height;
+        let new_ratio = width as f64 / height as f64;
+        if (new_ratio - initial_ratio).abs() < EPSILON {
+            gl::Viewport(0, 0, width as i32, height as i32);
+        } else if new_ratio > initial_ratio {
+            // bigger width
+            let new_height = height as f64;
+            let new_width = initial_ratio * new_height;
+            let width_offset = (width as f64 - new_width) / 2.0;
+            gl::Viewport(width_offset as i32, 0, new_width as i32, new_height as i32);
+        } else {
+            // bigger height
+            let new_width = width as f64;
+            let new_height = new_width / initial_ratio;
+            let height_offset = (height as f64 - new_height) / 2.0;
+            gl::Viewport(0, height_offset as i32, new_width as i32, new_height as i32);
+        }
+        self.redraw();
+    }
 }
 
+/// Clear the current colors
 pub unsafe fn clear_gl_color() {
     gl::ClearColor(0., 0., 0., 1.);
     check_gl_error("ClearColor");
@@ -184,6 +203,8 @@ pub unsafe fn clear_gl_color() {
     check_gl_error("Clear");
 }
 
+/// Check if an error was returned by the last openGL function.
+/// Print an error on stderr if that's the case.
 fn check_gl_error(source: &str) {
     let err = unsafe { gl::GetError() };
     if err != gl::NO_ERROR {
@@ -191,6 +212,7 @@ fn check_gl_error(source: &str) {
     }
 }
 
+/// Create openGL program with the default vertex and fragment shaders.
 pub fn create_gl_program() -> Result<GlProgram, String> {
     let vertex_shader = CString::new(VERTEX_SHADER.as_bytes()).unwrap();
     let fragment_shader = CString::new(FRAGMENT_SHADER.as_bytes()).unwrap();
@@ -201,10 +223,6 @@ pub fn create_gl_program() -> Result<GlProgram, String> {
     let gl_program = GlProgram::from_shaders(&shaders)?;
     Ok(gl_program)
 }
-
-// pub fn load_gl_symbols(ctxt : &glutin::WindowedContext<glutin::PossiblyCurrent>) {
-//     gl::load_with(|symbol| ctxt.get_proc_address(symbol) as *const _);
-// }
 
 fn create_placeholder_cstring(len: usize) -> CString {
     let mut buffer: Vec<u8> = vec![0; len + 1];
