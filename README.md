@@ -48,9 +48,10 @@ improvement:
   - The Plain Text Extension could be completely handled.
 
   - For now we render each frame once it has been completely decoded.
-    A nice improvement would be to be able to progressively display each pixels
-    as they are being decoded. This would rarely be useful though, and might
-    only be visible when either file access or LZW decoding is remarkably slow.
+    Another mode could be to be able to progressively display each pixels
+    as they are being decoded. This would very rarely be better than the current
+    situation (I would even guess worst in most cases) though, and might
+    only be useful when either file access or LZW decoding is remarkably slow.
 
   - Some errors could be ignored (e.g. ignoring when too much color data is
     found instead of exiting) and logged.
