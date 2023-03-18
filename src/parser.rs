@@ -1,4 +1,4 @@
-use crate::color::{self, RGB};
+use crate::color::{self, Rgb};
 use crate::decoder::LzwDecoder;
 use crate::error::{GifParsingError, Result};
 use crate::event_loop::{ EventLoopProxy, GifEvent };
@@ -341,11 +341,11 @@ fn parse_graphic_control_extension(
 
 fn construct_next_frame(
     rdr : &mut impl GifRead,
-    global_color_table : &Option<&[RGB]>,
+    global_color_table : &Option<&[Rgb]>,
     base_buffer : Option<Vec<u32>>,
     img_height : u16,
     img_width : u16,
-    background_color : Option<RGB>,
+    background_color : Option<Rgb>,
     transparent_color_index : Option<u8>
 ) -> Result<Vec<u32>> {
     let curr_block_left = rdr.read_u16()?;
@@ -376,7 +376,7 @@ fn construct_next_frame(
         None
     };
 
-    let current_color_table : &[RGB] = if let Some(c) = &lct {
+    let current_color_table : &[Rgb] = if let Some(c) = &lct {
         c
     } else {
         match global_color_table {
@@ -468,7 +468,7 @@ pub struct GifHeader {
    pub is_table_sorted : bool,
    pub background_color_index : u8,
    pub pixel_aspect_ratio : u8,
-   pub global_color_table : Option<Vec<RGB>>,
+   pub global_color_table : Option<Vec<Rgb>>,
 }
 
 /// Parse Header part of a GIF buffer and the Global Color Table, if one.

@@ -26,7 +26,7 @@ impl Window {
     /// This window won't display anything by itself, you will need to use a
     /// separate rendering logic to do that.
     pub fn new(event_loop : &EventLoop, image_width : u16, image_height : u16) -> Window {
-        let window = create_window(image_width as f32, image_height as f32, &event_loop);
+        let window = create_window(image_width as f32, image_height as f32, event_loop);
         Window {
             windowed_context : window,
             base_width : image_width,

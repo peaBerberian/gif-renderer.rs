@@ -79,7 +79,7 @@ impl error::Error for GifParsingError {
 
 impl fmt::Display for GifParsingError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match &*self {
+        match self {
 
             GifParsingError::IOError(x) => x.fmt(f),
 

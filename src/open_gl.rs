@@ -217,9 +217,10 @@ pub fn create_gl_program() -> Result<GlProgram, String> {
     let vertex_shader = CString::new(VERTEX_SHADER.as_bytes()).unwrap();
     let fragment_shader = CString::new(FRAGMENT_SHADER.as_bytes()).unwrap();
 
-    let mut shaders : Vec<GlShader> = Vec::with_capacity(2);
-    shaders.push(GlShader::from_vert_source(&vertex_shader)?);
-    shaders.push(GlShader::from_frag_source(&fragment_shader)?);
+    let shaders : Vec<GlShader> = vec![
+        GlShader::from_vert_source(&vertex_shader)?,
+        GlShader::from_frag_source(&fragment_shader)?
+    ];
     let gl_program = GlProgram::from_shaders(&shaders)?;
     Ok(gl_program)
 }
