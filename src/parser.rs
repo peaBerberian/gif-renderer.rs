@@ -283,7 +283,7 @@ struct GraphicControlExtension {
     /// When a Delay Time is used and the User Input Flag is set, processing
     /// will continue when user input is received or when the delay time
     /// expires, whichever occurs first.
-    user_input : bool,
+    _user_input : bool,
 
     /// The Transparency Index is such that when encountered, the corresponding
     /// pixel of the display device is not modified and processing goes on to
@@ -317,7 +317,7 @@ fn parse_graphic_control_extension(
         3 => DisposalMethod::RestoreToPrevious,
         _ => DisposalMethod::NoDisposalSpecified,
     };
-    let user_input : bool = packed_fields & 0x02 != 0;
+    let _user_input : bool = packed_fields & 0x02 != 0;
     let transparent_color_flag : bool = packed_fields & 0x01 != 0;
     let delay = rdr.read_u16()?;
     let transparent_color_index = if transparent_color_flag {
@@ -333,7 +333,7 @@ fn parse_graphic_control_extension(
     }
     Ok(GraphicControlExtension {
         disposal_method,
-        user_input,
+        _user_input,
         transparent_color_index,
         delay,
     })
