@@ -4,7 +4,7 @@ use glutin::{
     event_loop::{
         ControlFlow,
         EventLoop as GlutinEventLoop,
-        EventLoopProxy as GlutinEventLoopProxy
+        EventLoopProxy as GlutinEventLoopProxy, EventLoopBuilder
     },
 };
 use crate::open_gl::GlRenderer;
@@ -37,7 +37,7 @@ impl EventLoop {
     /// Create a new event loop.
     /// This event loop won't run until you call the `run` function.
     pub fn new() -> EventLoop {
-        let event_loop : GlutinEventLoop<GifEvent> = GlutinEventLoop::with_user_event();
+        let event_loop : GlutinEventLoop<GifEvent> = EventLoopBuilder::with_user_event().build();
         EventLoop { event_loop }
     }
 
