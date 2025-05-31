@@ -5,5 +5,5 @@ authors = ["peaBerberian <pea.berberian@gmail.com>"]
 edition = "2018"
 
 [dependencies]
-glutin = "0.29.1"
-gl = "0.14.0"
+eframe = "0.31.1"
+egui = "0.31.1"
