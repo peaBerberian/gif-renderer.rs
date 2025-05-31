@@ -69,7 +69,13 @@ pub fn decode(
         match rdr.read_u8()? {
             IMAGE_DESCRIPTOR_BLOCK_ID => {
                 let (delay, transparent_color_index) = match &last_graphic_ext {
-                    Some(e) => (Some(e.delay), e.transparent_color_index),
+                    Some(e) => {
+                        if e.delay == 0 {
+                            (None, e.transparent_color_index)
+                        } else {
+                            (Some(e.delay), e.transparent_color_index)
+                        }
+                    }
                     None => (None, None),
                 };
 

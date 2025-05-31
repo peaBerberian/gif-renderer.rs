@@ -6,11 +6,13 @@ mod error;
 mod gif_reader;
 mod parser;
 
-use std::time;
-
 use eframe::egui;
 use egui::{ColorImage, TextureHandle, ViewportBuilder};
 use gif_reader::{GifRead, GifReader};
+use std::{
+    sync::mpsc::{channel, Receiver},
+    time::{self, Duration, Instant},
+};
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
@@ -36,12 +38,12 @@ pub(crate) struct GifRendererEframeApp {
 
     width: usize,
     height: usize,
-    receiver: std::sync::mpsc::Receiver<GifEvent>,
+    receiver: Receiver<GifEvent>,
 
     // Store every frames and the corresponding delays to the next frame, if one.
     // This will be needed if the GIF has to loop
     frames: Vec<(ColorImage, Option<u16>)>,
-    last_rendering_time: std::time::Instant,
+    last_rendering_time: Instant,
     current_delay: Option<u16>,
     curr_frame_idx: usize,
     no_more_frame: bool,
@@ -56,7 +58,6 @@ impl GifRendererEframeApp {
         });
         let viewport = ViewportBuilder::default()
             .with_title(WINDOW_TITLE)
-            // TODO:
             .with_inner_size((header.width as f32, header.height as f32));
 
         let options = eframe::NativeOptions {
@@ -68,7 +69,7 @@ impl GifRendererEframeApp {
 
         let width = header.width as usize;
         let height = header.height as usize;
-        let (tx, rx) = std::sync::mpsc::channel::<GifEvent>();
+        let (tx, rx) = channel::<GifEvent>();
         let app = Self {
             texture: None,
             width,
@@ -136,11 +137,14 @@ impl eframe::App for GifRendererEframeApp {
         }
 
         let now = time::Instant::now();
-        // let mut curr_frame = self.texture;
-        match self.current_delay {
-            None => {}
-            Some(delay) => {
-                if !self.frames.is_empty() {
+
+        // ~60fps by default while waiting for frames
+        let mut delay_til_next = Some(Duration::from_millis(16));
+
+        if !self.frames.is_empty() {
+            match self.current_delay {
+                None => {}
+                Some(delay) => {
                     let delay_dur = time::Duration::from_millis(10 * delay as u64);
                     if now - self.last_rendering_time >= delay_dur {
                         if self.curr_frame_idx < self.frames.len() {
@@ -149,14 +153,17 @@ impl eframe::App for GifRendererEframeApp {
                                 self.frames[self.curr_frame_idx].0.clone(),
                                 Default::default(),
                             ));
-                            self.current_delay = self.frames[self.curr_frame_idx].1;
+                            let duration = self.frames[self.curr_frame_idx].1;
+                            self.current_delay = duration;
                             self.curr_frame_idx += 1;
                             self.last_rendering_time = now;
+                            if let Some(dur) = duration {
+                                delay_til_next = Some(Duration::from_millis(dur as u64));
+                            }
                         } else if self.no_more_frame {
                             match self.loop_left {
                                 None => {
-                                    // *control_flow = ControlFlow::Exit;
-                                    return;
+                                    delay_til_next = None;
                                 }
                                 Some(x) => {
                                     match x {
@@ -176,6 +183,9 @@ impl eframe::App for GifRendererEframeApp {
                                     self.current_delay = self.frames[0].1;
                                     self.curr_frame_idx = 1;
                                     self.last_rendering_time = now;
+                                    if let Some(dur) = self.current_delay {
+                                        delay_til_next = Some(Duration::from_millis(dur as u64));
+                                    }
                                 }
                             }
                         }
@@ -189,12 +199,12 @@ impl eframe::App for GifRendererEframeApp {
                 ui.label("Press ESC to exit");
                 ui.separator();
                 ui.label(format!("Size: {}x{}", self.width, self.height));
+                // TODO: next and prev buttons?
                 ui.separator();
             });
 
             ui.separator();
 
-            // Display the framebuffer as a texture
             if let Some(texture) = &self.texture {
                 ui.image(texture);
             }
@@ -202,7 +212,8 @@ impl eframe::App for GifRendererEframeApp {
             ui.separator();
         });
 
-        // limit to 60fps
-        ctx.request_repaint_after(std::time::Duration::from_millis(16));
+        if let Some(delay) = delay_til_next {
+            ctx.request_repaint_after(delay);
+        }
     }
 }
