@@ -1,16 +1,15 @@
 mod color;
 mod decoder;
 mod error;
+mod frames_store;
 mod gif_reader;
 mod parser;
 
 use eframe::egui;
 use egui::{ColorImage, TextureHandle, ViewportBuilder};
+use frames_store::FramesStore;
 use gif_reader::{GifRead, GifReader};
-use std::{
-    sync::mpsc::{channel, Receiver},
-    time::{self, Duration, Instant},
-};
+use std::sync::mpsc::{channel, Receiver};
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
@@ -32,20 +31,12 @@ const WINDOW_TITLE: &str = "GIF Displayer (Esc key to exit)";
 use parser::GifEvent;
 
 pub(crate) struct GifRendererEframeApp {
+    frames: FramesStore<ColorImage>,
     texture: Option<TextureHandle>,
 
     width: usize,
     height: usize,
     receiver: Receiver<GifEvent>,
-
-    // Store every frames and the corresponding delays to the next frame, if one.
-    // This will be needed if the GIF has to loop
-    frames: Vec<(ColorImage, Option<u16>)>,
-    last_rendering_time: Instant,
-    current_delay: Option<u16>,
-    curr_frame_idx: usize,
-    no_more_frame: bool,
-    loop_left: Option<u16>,
 }
 
 impl GifRendererEframeApp {
@@ -69,17 +60,11 @@ impl GifRendererEframeApp {
         let height = header.height as usize;
         let (tx, rx) = channel::<GifEvent>();
         let app = Self {
+            frames: FramesStore::new(),
             texture: None,
             width,
             height,
             receiver: rx,
-
-            frames: vec![],
-            last_rendering_time: time::Instant::now(),
-            current_delay: Some(0),
-            curr_frame_idx: 0,
-            no_more_frame: false,
-            loop_left: None,
         };
         // 4 - decode GIF in another thread
         std::thread::spawn(move || {
@@ -103,14 +88,6 @@ impl GifRendererEframeApp {
             }),
         )
     }
-
-    // fn resize(&mut self, new_width: usize, new_height: usize) {
-    //     if new_width != self.width || new_height != self.height {
-    //         self.width = new_width;
-    //         self.height = new_height;
-    //         self.texture = None;
-    //     }
-    // }
 }
 
 impl eframe::App for GifRendererEframeApp {
@@ -127,8 +104,8 @@ impl eframe::App for GifRendererEframeApp {
         while let Ok(event) = self.receiver.try_recv() {
             match event {
                 GifEvent::Frame { data, duration } => {
-                    // We used [u32] initially, but egui wants [u8].
-                    // We could be transmuting and stuff for max efficiency, but I'm in the middle
+                    // I used [u32] initially, but egui wants [u8].
+                    // I could be transmuting and stuff for max efficiency, but I'm in the middle
                     // of changing the gui so I'm focusing on other things here
                     let mut data_u8 = Vec::with_capacity(data.len() * std::mem::size_of::<u32>());
                     for num in data {
@@ -138,73 +115,19 @@ impl eframe::App for GifRendererEframeApp {
                         [self.width, self.height],
                         &data_u8,
                     );
-                    self.frames.push((img, duration));
+                    self.frames.add_frame(img, duration);
                 }
                 GifEvent::LoopingInfo(looping_info) => {
-                    self.loop_left = looping_info;
+                    self.frames.set_loop_iterations(looping_info)
                 }
-                GifEvent::FrameEnd => self.no_more_frame = true,
+                GifEvent::FrameEnd => self.frames.end_of_frames(),
             }
         }
 
-        let now = time::Instant::now();
-
-        // ~60fps by default while waiting for frames
-        let mut delay_til_next = Some(Duration::from_millis(16));
-
-        if !self.frames.is_empty() {
-            match self.current_delay {
-                None => {}
-                Some(delay) => {
-                    let delay_dur = time::Duration::from_millis(10 * delay as u64);
-                    if now - self.last_rendering_time >= delay_dur {
-                        if self.curr_frame_idx < self.frames.len() {
-                            self.texture = Some(ctx.load_texture(
-                                "frame",
-                                self.frames[self.curr_frame_idx].0.clone(),
-                                Default::default(),
-                            ));
-                            let duration = self.frames[self.curr_frame_idx].1;
-                            self.current_delay = duration;
-                            self.curr_frame_idx += 1;
-                            self.last_rendering_time = now;
-                            if let Some(dur) = duration {
-                                delay_til_next = Some(Duration::from_millis(dur as u64));
-                            }
-                        } else if self.no_more_frame {
-                            match self.loop_left {
-                                None => {
-                                    delay_til_next = None;
-                                }
-                                Some(x) => {
-                                    match x {
-                                        0 => { /* Infinite looping, do nothing. */ }
-                                        1 => {
-                                            self.loop_left = None;
-                                        }
-                                        x => {
-                                            self.loop_left = Some(x - 1);
-                                        }
-                                    };
-                                    self.texture = Some(ctx.load_texture(
-                                        "frame",
-                                        self.frames[0].0.clone(),
-                                        Default::default(),
-                                    ));
-                                    self.current_delay = self.frames[0].1;
-                                    self.curr_frame_idx = 1;
-                                    self.last_rendering_time = now;
-                                    if let Some(dur) = self.current_delay {
-                                        delay_til_next = Some(Duration::from_millis(dur as u64));
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
+        let frame_change = self.frames.check();
+        if let Some(new_frame) = frame_change.new_frame {
+            self.texture = Some(ctx.load_texture("frame", new_frame, Default::default()));
         }
-
         egui::CentralPanel::default()
             .frame(egui::Frame::NONE) // No margins or padding
             .show(ctx, |ui| {
@@ -224,7 +147,7 @@ impl eframe::App for GifRendererEframeApp {
                 }
             });
 
-        if let Some(delay) = delay_til_next {
+        if let Some(delay) = frame_change.delay_before_next_frame {
             ctx.request_repaint_after(delay);
         }
     }
