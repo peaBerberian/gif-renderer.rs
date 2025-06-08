@@ -12,7 +12,7 @@ pub trait GifRead {
     ///   - should I ignore it and just consider the other bits
     /// For now, we parse it as if it was UTF-8 which may be compatible, but seems
     /// overkill. Maybe a better solution can be found.
-    fn read_str(&mut self, nb_bytes : usize) -> Result<String, GifReaderStringError>;
+    fn read_str(&mut self, nb_bytes: usize) -> Result<String, GifReaderStringError>;
 
     /// Get the next two bytes as an u16.
     fn read_u16(&mut self) -> Result<u16, std::io::Error>;
@@ -21,10 +21,10 @@ pub trait GifRead {
     fn read_u8(&mut self) -> Result<u8, std::io::Error>;
 
     /// Return the next N bytes as a slice of u8.
-    fn read_bytes(&mut self, nb_bytes : usize) -> Result<Vec<u8>, std::io::Error>;
+    fn read_bytes(&mut self, nb_bytes: usize) -> Result<Vec<u8>, std::io::Error>;
 
     /// Skip `nb_bytes` number of bytes.
-    fn skip_bytes(&mut self, nb_bytes : usize) -> Result<(), std::io::Error>;
+    fn skip_bytes(&mut self, nb_bytes: usize) -> Result<(), std::io::Error>;
 
     /// Get the GifReader's current cursor position
     fn get_pos(&self) -> usize;
@@ -36,11 +36,11 @@ pub trait GifRead {
 /// wanted "format" (e.g. ASCII, u16, u8...).
 /// Please not that this struct does no image decoding, you will also need a
 /// decoder to make sense of GIF image data.
-pub struct GifReader<T : Read + Seek> {
+pub struct GifReader<T: Read + Seek> {
     /// Reader returning the GIF buffer
-    reader : T,
+    reader: T,
     /// Current position in the GIF file.
-    pos : usize,
+    pos: usize,
 }
 
 /// Errors triggered when reading a string from a GIF buffer
@@ -48,20 +48,17 @@ pub enum GifReaderStringError {
     /// The string is an invalid UTF8 character
     FromUtf8Error(std::string::FromUtf8Error),
     /// We could not read the specified amount of bytes from the GIF buffer.
-    IOError(std::io::Error)
+    IOError(std::io::Error),
 }
 
 impl<T: Read + Seek> GifReader<T> {
     /// Create a new GifReader from the given GIF buffer.
-    pub fn new(reader : T) -> GifReader<T> {
-        GifReader {
-            reader,
-            pos: 0,
-        }
+    pub fn new(reader: T) -> GifReader<T> {
+        GifReader { reader, pos: 0 }
     }
 }
 
-impl<T : Read + Seek> GifRead for GifReader<T> {
+impl<T: Read + Seek> GifRead for GifReader<T> {
     /// Read the next N bytes as an utf8 string.
     /// TODO GIF strings always seem to be in ASCII.
     /// Here I'm left with a dilemma:
@@ -70,7 +67,7 @@ impl<T : Read + Seek> GifRead for GifReader<T> {
     ///   - should I ignore it and just consider the other bits
     /// For now, we parse it as if it was UTF-8 which may be compatible, but seems
     /// overkill. Maybe a better solution can be found.
-    fn read_str(&mut self, nb_bytes : usize) -> Result<String, GifReaderStringError> {
+    fn read_str(&mut self, nb_bytes: usize) -> Result<String, GifReaderStringError> {
         self.pos += nb_bytes;
         let mut buffer = vec![0; nb_bytes];
         if let Err(e) = self.reader.read_exact(&mut buffer) {
@@ -78,7 +75,7 @@ impl<T : Read + Seek> GifRead for GifReader<T> {
         }
         match String::from_utf8(buffer) {
             Err(e) => Err(GifReaderStringError::FromUtf8Error(e)),
-            Ok(x) => Ok(x)
+            Ok(x) => Ok(x),
         }
     }
 
@@ -99,7 +96,7 @@ impl<T : Read + Seek> GifRead for GifReader<T> {
     }
 
     /// Return the next N bytes as a slice of u8.
-    fn read_bytes(&mut self, nb_bytes : usize) -> Result<Vec<u8>, std::io::Error> {
+    fn read_bytes(&mut self, nb_bytes: usize) -> Result<Vec<u8>, std::io::Error> {
         self.pos += nb_bytes;
         let mut buffer = vec![0; nb_bytes];
         self.reader.read_exact(&mut buffer)?;
@@ -107,9 +104,10 @@ impl<T : Read + Seek> GifRead for GifReader<T> {
     }
 
     /// Skip `nb_bytes` number of bytes.
-    fn skip_bytes(&mut self, nb_bytes : usize) -> Result<(), std::io::Error> {
+    fn skip_bytes(&mut self, nb_bytes: usize) -> Result<(), std::io::Error> {
         self.pos += nb_bytes;
-        self.reader.seek(std::io::SeekFrom::Start(self.pos as u64))?;
+        self.reader
+            .seek(std::io::SeekFrom::Start(self.pos as u64))?;
         Ok(())
     }
 

@@ -2,15 +2,15 @@
 /// This struct keeps state in between `decode_next` calls so that you can call
 /// it with contiguous subparts of the compressed data as you read them.
 pub struct LzwDecoder {
-    current_val : Vec<u8>,
-    bit_reader : LsbReader,
-    dict : LzwDictionary,
+    current_val: Vec<u8>,
+    bit_reader: LsbReader,
+    dict: LzwDictionary,
 }
 
 impl LzwDecoder {
     /// Create a new LzwDecoder, with the given initial code size that should
     /// have been parsed from the GIF buffer before its compressed data.
-    pub fn new(min_code_size : u8) -> LzwDecoder {
+    pub fn new(min_code_size: u8) -> LzwDecoder {
         LzwDecoder {
             current_val: vec![],
             bit_reader: LsbReader::new(),
@@ -19,42 +19,47 @@ impl LzwDecoder {
     }
 
     /// Decode the next block of compressed data.
-    pub fn decode_next(&mut self, buf : &[u8]) -> Vec<u8> {
-        let mut decoded_buf : Vec<u8> = vec![];
+    pub fn decode_next(&mut self, buf: &[u8]) -> Vec<u8> {
+        let mut decoded_buf: Vec<u8> = vec![];
         let mut current_offset = 0;
         loop {
             let curr_code_size = self.dict.get_curr_code_size();
-            match self.bit_reader.get_next_code(&buf[current_offset..], curr_code_size) {
+            match self
+                .bit_reader
+                .get_next_code(&buf[current_offset..], curr_code_size)
+            {
                 (_, None) => {
                     return decoded_buf;
-                },
+                }
                 (consumed, Some(code)) => {
                     current_offset += consumed;
                     match self.dict.get_value(code) {
                         DictionaryValue::Clear => {
                             self.dict.clear();
                             self.current_val = vec![];
-                        },
-                        DictionaryValue::Stop => {
-                            return decoded_buf
-                        },
+                        }
+                        DictionaryValue::Stop => return decoded_buf,
                         DictionaryValue::None => {
                             eprintln!("Error: Impossible to decode, found unknown code: {}", code);
                             std::process::exit(1);
-                        },
+                        }
                         DictionaryValue::Repeat => {
                             if self.current_val.is_empty() {
-                                eprintln!("Error: Impossible to decode, found unknown code: {}", code);
+                                eprintln!(
+                                    "Error: Impossible to decode, found unknown code: {}",
+                                    code
+                                );
                                 std::process::exit(1);
                             }
                             let first_val = self.current_val[0];
                             self.current_val.push(first_val);
                             decoded_buf.extend(self.current_val.clone());
                             self.dict.push_new_value(self.current_val.clone());
-                        },
+                        }
                         DictionaryValue::Value(val) => {
                             self.current_val.push(val[0]);
-                            if self.current_val.len() != 1 { // Only at one at the beginning or when cleared
+                            if self.current_val.len() != 1 {
+                                // Only at one at the beginning or when cleared
                                 let val_cloned = val.clone();
                                 self.dict.push_new_value(self.current_val.clone());
                                 self.current_val = val_cloned;
@@ -72,10 +77,10 @@ impl LzwDecoder {
 #[derive(Debug)]
 struct LzwDictionary {
     /// The minimum code size at the instanciation of the LzwDictionary.
-    min_code_size : u8,
+    min_code_size: u8,
 
     /// Current code size that should be read from a compressed buffer.
-    curr_code_size : u8,
+    curr_code_size: u8,
 
     /// Table of correspondance between codes and corresponding values.
     /// Here a vec of Option type, where the code will be the index and the
@@ -85,7 +90,7 @@ struct LzwDictionary {
     /// `stop` as those are easy to calculate and would make the table take
     /// more space than it should (an Option<Vec<T>> doesn't augment the memory
     /// imprint of a Vec<T>).
-    table : Vec<Option<Vec<u8>>>,
+    table: Vec<Option<Vec<u8>>>,
 }
 
 /// Value returned when interrogating the dictionnary through its `get_value`
@@ -111,8 +116,8 @@ enum DictionaryValue {
 
 impl LzwDictionary {
     /// Create a new LzwDictionary with the given initial code size.
-    fn new(min_code_size : u8) -> LzwDictionary {
-        let table : Vec<Option<Vec<u8>>> = Vec::with_capacity(512);
+    fn new(min_code_size: u8) -> LzwDictionary {
+        let table: Vec<Option<Vec<u8>>> = Vec::with_capacity(512);
         let mut dict = LzwDictionary {
             min_code_size,
             curr_code_size: min_code_size + 1,
@@ -127,7 +132,7 @@ impl LzwDictionary {
     fn clear(&mut self) {
         self.table.clear();
         self.curr_code_size = self.min_code_size + 1;
-        let initial_table_size : u16 = 1 << self.min_code_size as u16;
+        let initial_table_size: u16 = 1 << self.min_code_size as u16;
         for i in 0..initial_table_size {
             self.table.push(Some(vec![i as u8]));
         }
@@ -136,17 +141,19 @@ impl LzwDictionary {
     }
 
     /// Get the value corresponding to the code given.
-    fn get_value(&self, code : u16) -> DictionaryValue {
+    fn get_value(&self, code: u16) -> DictionaryValue {
         use std::cmp::Ordering;
 
         let code = code as usize;
         match code.cmp(&self.table.len()) {
             Ordering::Less => match &self.table[code] {
                 Some(val) => DictionaryValue::Value(val.clone()),
-                None => if code == 1 << self.min_code_size as u16 {
-                    DictionaryValue::Clear
-                } else {
-                    DictionaryValue::Stop
+                None => {
+                    if code == 1 << self.min_code_size as u16 {
+                        DictionaryValue::Clear
+                    } else {
+                        DictionaryValue::Stop
+                    }
                 }
             },
             Ordering::Equal => DictionaryValue::Repeat,
@@ -155,10 +162,9 @@ impl LzwDictionary {
     }
 
     /// Add a new value at the next code.
-    fn push_new_value(&mut self, val : Vec<u8>) {
+    fn push_new_value(&mut self, val: Vec<u8>) {
         self.table.push(Some(val));
-        if self.table.len() == (1 << self.curr_code_size as usize) &&
-            self.curr_code_size < 12 {
+        if self.table.len() == (1 << self.curr_code_size as usize) && self.curr_code_size < 12 {
             self.curr_code_size += 1;
         }
     }
@@ -185,10 +191,7 @@ struct LsbReader {
 impl LsbReader {
     /// Create a new LsbReader
     fn new() -> LsbReader {
-        LsbReader {
-            bits: 0,
-            acc: 0,
-        }
+        LsbReader { bits: 0, acc: 0 }
     }
 
     /// Reads and consumes `code_size` amount of bits from `buf`.
@@ -208,7 +211,7 @@ impl LsbReader {
                 buf = &buf[1..];
                 byte
             } else {
-                return (consumed, None)
+                return (consumed, None);
             };
             // Adds to perhaps previously-parsed bits
             self.acc |= (byte as u32) << self.bits;
