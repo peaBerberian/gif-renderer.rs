@@ -1,8 +1,17 @@
 use std::time::{self, Duration, Instant};
 
 pub(crate) struct FrameChange<T> {
-    pub(crate) new_frame: Option<T>,
-    pub(crate) delay_before_next_frame: Option<Duration>,
+    new_frame: Option<T>,
+    delay_before_next_frame: Option<Duration>,
+}
+
+impl<T> FrameChange<T> {
+    pub(crate) fn into_frame_data(self) -> Option<T> {
+        self.new_frame
+    }
+    pub(crate) fn delay_before_next_frame(&self) -> Option<Duration> {
+        self.delay_before_next_frame
+    }
 }
 
 impl<T> Default for FrameChange<T> {
@@ -14,7 +23,7 @@ impl<T> Default for FrameChange<T> {
     }
 }
 
-pub(crate) struct FramesStore<T: Clone> {
+pub(crate) struct FramesStore<T> {
     // Store every frames and the corresponding delays to the next frame, if one.
     // This will be needed if the GIF has to loop
     frames: Vec<(T, Option<u16>)>,
@@ -25,7 +34,7 @@ pub(crate) struct FramesStore<T: Clone> {
     left_loop_iterations: Option<u16>,
 }
 
-impl<T: Clone> FramesStore<T> {
+impl<T> FramesStore<T> {
     pub(crate) fn new() -> Self {
         Self {
             frames: vec![],
@@ -49,7 +58,7 @@ impl<T: Clone> FramesStore<T> {
         self.last_frame_known = true;
     }
 
-    pub(crate) fn check(&mut self) -> FrameChange<T> {
+    pub(crate) fn check(&mut self) -> FrameChange<&T> {
         let now = time::Instant::now();
 
         if self.frames.is_empty() {
@@ -81,11 +90,11 @@ impl<T: Clone> FramesStore<T> {
 
                 if self.curr_frame_idx < self.frames.len() {
                     let duration = self.frames[self.curr_frame_idx].1;
+                    let frame = &self.frames[self.curr_frame_idx].0;
                     self.curr_frame_delay = duration;
                     self.curr_frame_idx += 1;
                     self.last_change_time = now;
 
-                    let frame = self.frames[self.curr_frame_idx].0.clone();
                     return FrameChange {
                         new_frame: Some(frame),
                         delay_before_next_frame: duration.map(|d| Duration::from_millis(d as u64)),
@@ -121,7 +130,7 @@ impl<T: Clone> FramesStore<T> {
                             self.curr_frame_delay = self.frames[0].1;
                             self.curr_frame_idx = 1;
                             self.last_change_time = now;
-                            let frame = self.frames[0].0.clone();
+                            let frame = &self.frames[0].0;
                             if let Some(dur) = self.curr_frame_delay {
                                 let delay_til_next = Some(Duration::from_millis(dur as u64));
                                 FrameChange {

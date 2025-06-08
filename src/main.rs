@@ -125,8 +125,9 @@ impl eframe::App for GifRendererEframeApp {
         }
 
         let frame_change = self.frames.check();
-        if let Some(new_frame) = frame_change.new_frame {
-            self.texture = Some(ctx.load_texture("frame", new_frame, Default::default()));
+        let delay_before_next_frame = frame_change.delay_before_next_frame();
+        if let Some(new_frame) = frame_change.into_frame_data() {
+            self.texture = Some(ctx.load_texture("frame", new_frame.clone(), Default::default()));
         }
         egui::CentralPanel::default()
             .frame(egui::Frame::NONE) // No margins or padding
@@ -147,7 +148,7 @@ impl eframe::App for GifRendererEframeApp {
                 }
             });
 
-        if let Some(delay) = frame_change.delay_before_next_frame {
+        if let Some(delay) = delay_before_next_frame {
             ctx.request_repaint_after(delay);
         }
     }
