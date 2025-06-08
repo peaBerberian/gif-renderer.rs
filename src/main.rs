@@ -88,7 +88,20 @@ impl GifRendererEframeApp {
                 std::process::exit(1);
             }
         });
-        eframe::run_native(WINDOW_TITLE, options, Box::new(|_cc| Ok(Box::new(app))))
+        eframe::run_native(
+            WINDOW_TITLE,
+            options,
+            Box::new(|cc| {
+                cc.egui_ctx.set_style(egui::Style {
+                    spacing: egui::style::Spacing {
+                        window_margin: egui::Margin::ZERO,
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                });
+                Ok(Box::new(app))
+            }),
+        )
     }
 
     // fn resize(&mut self, new_width: usize, new_height: usize) {
@@ -192,23 +205,24 @@ impl eframe::App for GifRendererEframeApp {
             }
         }
 
-        egui::CentralPanel::default().show(ctx, |ui| {
-            ui.horizontal(|ui| {
-                ui.label("Press ESC to exit");
-                ui.separator();
-                ui.label(format!("Size: {}x{}", self.width, self.height));
-                // TODO: next and prev buttons?
-                ui.separator();
+        egui::CentralPanel::default()
+            .frame(egui::Frame::NONE) // No margins or padding
+            .show(ctx, |ui| {
+                ui.add_space(5.0); // top padding
+                ui.horizontal(|ui| {
+                    ui.add_space(5.0); // left padding
+                    ui.label("Press ESC to exit");
+                    ui.separator();
+                    ui.label(format!("Size: {}x{}", self.width, self.height));
+                    // TODO: next and prev buttons?
+                    ui.add_space(5.0); // right padding
+                });
+                ui.add_space(3.0); // bottom padding
+
+                if let Some(texture) = &self.texture {
+                    ui.image(texture);
+                }
             });
-
-            ui.separator();
-
-            if let Some(texture) = &self.texture {
-                ui.image(texture);
-            }
-
-            ui.separator();
-        });
 
         if let Some(delay) = delay_til_next {
             ctx.request_repaint_after(delay);
