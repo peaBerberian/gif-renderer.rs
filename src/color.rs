@@ -30,27 +30,26 @@ impl From<Rgb> for u32 {
 /// start of the first element in that color table) into the corresponding
 /// vector of RGB values.
 pub fn parse_color_table(rdr: &mut impl GifRead, nb_entries: usize) -> Result<Vec<Rgb>> {
-    // Directly transmute the read GIF color table into ours, as they should be
-    // in the same format.
-    let raw_color_table = rdr.read_bytes(nb_entries * 3)?;
-    let (ptr, len, cap) = raw_color_table.into_raw_parts();
-
-    let ct = unsafe {
-        let ptr = ptr as *mut Rgb;
-        Vec::from_raw_parts(ptr, len, cap)
-    };
-    Ok(ct)
-
-    // Old - safer - implementation:
-
-    // let mut ct : Vec<Rgb> = vec![Rgb { r: 0, g: 0, b: 0}; nb_entries as usize];
-    // for curr_elt_idx in 0..(nb_entries) {
-    //     let colors = rdr.read_bytes(3)?;
-    //     ct[curr_elt_idx as usize] = Rgb {
-    //         r: colors[0],
-    //         g: colors[1],
-    //         b: colors[2],
-    //     };
-    // }
+    // NOTE: Old implem, I prefer relying on safe rust now
+    //
+    // // Directly transmute the read GIF color table into ours, as they should be
+    // // in the same format.
+    // let raw_color_table = rdr.read_bytes(nb_entries * 3)?;
+    // let (ptr, len, cap) = raw_color_table.into_raw_parts();
+    //
+    // let ct = unsafe {
+    //     let ptr = ptr as *mut Rgb;
+    //     Vec::from_raw_parts(ptr, len, cap)
+    // };
     // Ok(ct)
+    let mut ct: Vec<Rgb> = vec![Rgb { r: 0, g: 0, b: 0 }; nb_entries as usize];
+    for curr_elt_idx in 0..(nb_entries) {
+        let colors = rdr.read_bytes(3)?;
+        ct[curr_elt_idx as usize] = Rgb {
+            r: colors[0],
+            g: colors[1],
+            b: colors[2],
+        };
+    }
+    Ok(ct)
 }
