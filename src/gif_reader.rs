@@ -10,6 +10,7 @@ pub trait GifRead {
     ///   - should I return an error if the most significant bit is set to `1`
     ///     (considering ASCII codes are 7 bits only)
     ///   - should I ignore it and just consider the other bits
+    ///
     /// For now, we parse it as if it was UTF-8 which may be compatible, but seems
     /// overkill. Maybe a better solution can be found.
     fn read_str(&mut self, nb_bytes: usize) -> Result<String, GifReaderStringError>;
@@ -46,7 +47,7 @@ pub struct GifReader<T: Read + Seek> {
 /// Errors triggered when reading a string from a GIF buffer
 pub enum GifReaderStringError {
     /// The string is an invalid UTF8 character
-    FromUtf8Error(std::string::FromUtf8Error),
+    FromUtf8Error,
     /// We could not read the specified amount of bytes from the GIF buffer.
     IOError(std::io::Error),
 }
@@ -65,6 +66,7 @@ impl<T: Read + Seek> GifRead for GifReader<T> {
     ///   - should I return an error if the most significant bit is set to `1`
     ///     (considering ASCII codes are 7 bits only)
     ///   - should I ignore it and just consider the other bits
+    ///
     /// For now, we parse it as if it was UTF-8 which may be compatible, but seems
     /// overkill. Maybe a better solution can be found.
     fn read_str(&mut self, nb_bytes: usize) -> Result<String, GifReaderStringError> {
@@ -74,7 +76,7 @@ impl<T: Read + Seek> GifRead for GifReader<T> {
             return Err(GifReaderStringError::IOError(e));
         }
         match String::from_utf8(buffer) {
-            Err(e) => Err(GifReaderStringError::FromUtf8Error(e)),
+            Err(_) => Err(GifReaderStringError::FromUtf8Error),
             Ok(x) => Ok(x),
         }
     }

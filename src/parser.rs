@@ -500,17 +500,17 @@ fn construct_next_frame(
 pub struct GifHeader {
     pub width: u16,
     pub height: u16,
-    pub nb_color_resolution_bits: u8,
-    pub is_table_sorted: bool,
     pub background_color_index: u8,
-    pub pixel_aspect_ratio: u8,
     pub global_color_table: Option<Vec<Rgb>>,
+    pub _nb_color_resolution_bits: u8,
+    pub _is_table_sorted: bool,
+    pub _pixel_aspect_ratio: u8,
 }
 
 /// Parse Header part of a GIF buffer and the Global Color Table, if one.
 pub fn parse_header(rdr: &mut impl GifRead) -> Result<GifHeader> {
     match rdr.read_str(3) {
-        Err(GifReaderStringError::FromUtf8Error(_)) => {
+        Err(GifReaderStringError::FromUtf8Error) => {
             return Err(GifParsingError::NoGIFHeader);
         }
         Ok(x) if x != "GIF" => {
@@ -523,7 +523,7 @@ pub fn parse_header(rdr: &mut impl GifRead) -> Result<GifHeader> {
     };
 
     match rdr.read_str(3) {
-        Err(GifReaderStringError::FromUtf8Error(_)) => {
+        Err(GifReaderStringError::FromUtf8Error) => {
             return Err(GifParsingError::UnsupportedVersion(None));
         }
         Ok(v) if v != "89a" && v != "87a" => {
@@ -556,10 +556,10 @@ pub fn parse_header(rdr: &mut impl GifRead) -> Result<GifHeader> {
     Ok(GifHeader {
         width,
         height,
-        nb_color_resolution_bits,
-        is_table_sorted,
+        _nb_color_resolution_bits: nb_color_resolution_bits,
+        _is_table_sorted: is_table_sorted,
         background_color_index,
-        pixel_aspect_ratio,
+        _pixel_aspect_ratio: pixel_aspect_ratio,
         global_color_table,
     })
 }

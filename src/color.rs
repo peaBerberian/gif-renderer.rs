@@ -4,8 +4,6 @@ use crate::gif_reader::GifRead;
 /// Simple structure containing "RGB" (Red Green Blue) colors as defined in a
 /// GIF's color table.
 #[derive(Debug, Clone, Copy)]
-#[repr(packed)] // Should not be needed but still make sure, as this is needed
-                // for a parsing optimization.
 pub struct Rgb {
     r: u8,
     g: u8,
@@ -42,10 +40,10 @@ pub fn parse_color_table(rdr: &mut impl GifRead, nb_entries: usize) -> Result<Ve
     //     Vec::from_raw_parts(ptr, len, cap)
     // };
     // Ok(ct)
-    let mut ct: Vec<Rgb> = vec![Rgb { r: 0, g: 0, b: 0 }; nb_entries as usize];
-    for curr_elt_idx in 0..(nb_entries) {
+    let mut ct: Vec<Rgb> = vec![Rgb { r: 0, g: 0, b: 0 }; nb_entries];
+    for item in ct.iter_mut() {
         let colors = rdr.read_bytes(3)?;
-        ct[curr_elt_idx as usize] = Rgb {
+        *item = Rgb {
             r: colors[0],
             g: colors[1],
             b: colors[2],
