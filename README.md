@@ -4,22 +4,24 @@ This is a GIF file decoder written in Rust, compatible to both 87a and 89a GIF
 versions.
 
 This tool should work as expected on Linux, Windows and macOS. Other platforms
-might be supported. The most platform-sensitive code is on the rendering side:
-This tool relies on the `glutin` crate for OpenGL context creation and the `gl`
-crate for openGL bindings.
+might be supported.
 
-Please note that it needs nightly Rust to be built, as it make use of the
-`vec_into_raw_parts` feature.
+It both contains a:
 
+- `src/main.rs` entry point allowing it to compile and run natively, e.g.
+  through `cargo build`. This binary takes a GIF path as argument and displays
+  it in a native window.
 
-## How to use it? ##############################################################
+- and a `src/lib.rs` to allow importing it as a crate/library. WebAssembly
+  targets are also supported.
 
-After building it (the most straightforward way being to [use
-Cargo](https://doc.rust-lang.org/cargo/) here), you can use the resulting binary
-to display a GIF image by adding its path as argument:
-```sh
-gif-renderer images/some-gif-file.gif
-```
+A demo of it running on the web thanks to WebAssembly is available here:
+https://peaberberian.github.io/gif-renderer.rs/
+
+This demo allows to play/pause a gif, navigate frame-by-frame, reverse playback
+and export each frame as a standalone png. More features may be coming if I feel
+like it (or if you propose it)!
+
 
 ## Is it finished? Can I use this? #############################################
 
@@ -38,20 +40,3 @@ implement from scratch.
 As I encountered no GIF besides Plain Text Extension demos, with that feature,
 and that not even web browsers seem to handle it well, I figured it was the
 sensible thing to do to ignore it.
-
-
-## What's left to do? ##########################################################
-
-This tool works well and is pretty fast, but there is still some room for
-improvement:
-
-  - The Plain Text Extension could be completely handled.
-
-  - For now we render each frame once it has been completely decoded.
-    Another mode could be to be able to progressively display each pixels
-    as they are being decoded. This would very rarely be better than the current
-    situation (I would even guess worst in most cases) though, and might
-    only be useful when either file access or LZW decoding is remarkably slow.
-
-  - Some errors could be ignored (e.g. ignoring when too much color data is
-    found instead of exiting) and logged.

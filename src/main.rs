@@ -1,5 +1,4 @@
-use eframe::egui;
-use egui::{ColorImage, TextureHandle, ViewportBuilder};
+use eframe::egui::{self, ColorImage, TextureHandle, ViewportBuilder};
 use gif_renderer::{
     decode_gif_with_header, frames_store::FramesStore, parse_header, DecodedGif, GifParsingError,
     GifReader,
