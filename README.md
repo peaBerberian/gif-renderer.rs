@@ -10,7 +10,9 @@ It both contains a:
 
 - `src/main.rs` entry point allowing it to compile and run natively, e.g.
   through `cargo build`. This binary takes a GIF path as argument and displays
-  it in a native window.
+  it in a native window built with
+  [`winit`](https://github.com/rust-windowing/winit) and
+  [`pixels`](https://github.com/parasyte/pixels).
 
 - and a `src/lib.rs` to allow importing it as a crate/library. WebAssembly
   targets are also supported.
