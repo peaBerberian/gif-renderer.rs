@@ -31,6 +31,7 @@ cpSync(
   join(wasmOutDir, 'gif_renderer.wasm'),
 );
 cpSync(join(thisDir, 'index.html'), join(distDir, 'index.html'));
+cpSync(join(thisDir, 'favicon.svg'), join(distDir, 'favicon.svg'));
 cpSync(join(repoRoot, 'assets', 'earth.gif'), join(assetOutDir, 'earth.gif'));
 
 await build({
