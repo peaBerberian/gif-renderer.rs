@@ -1,18 +1,24 @@
 # gif-renderer #################################################################
 
-This is a GIF file decoder written in Rust, compatible to both 87a and 89a GIF
-versions.
+This is a minimal GIF (pronounced "jif"!) file decoder written in Rust,
+compatible to both 87a and 89a GIF versions.
 
-This tool should work as expected on Linux, Windows and macOS. Other platforms
-might be supported.
+Written for educational purposes, this tool should work as expected on Linux,
+Windows and macOS. Other platforms might be supported.
 
-It both contains a:
+It both contains:
 
-- `src/main.rs` entry point allowing it to compile and run natively, e.g.
-  through `cargo build`. This binary takes a GIF path as argument and displays
-  it in a native window built with
-  [`winit`](https://github.com/rust-windowing/winit) and
-  [`pixels`](https://github.com/parasyte/pixels).
+- a `src/main.rs` entry point allowing it to run natively.
+
+  Here it displays a GIF in a native window built thanks to the low-level crates:
+  - [`winit`](https://github.com/rust-windowing/winit) for window creation and
+    event handing (resizes, keys...)
+  - [`pixels`](https://github.com/parasyte/pixels) to "draw" the gif on screen
+    in a pixel-based frame buffer.
+
+  To compile it for a native target, just use the usual
+  [`cargo`](https://doc.rust-lang.org/cargo/) commands.
+  Then run the produced binary with the path to your gif as an argument.
 
 - and a `src/lib.rs` to allow importing it as a crate/library. WebAssembly
   targets are also supported.
