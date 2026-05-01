@@ -1,3 +1,5 @@
+use crate::error::{GifParsingError, Result};
+
 /// Decompress data compressed in the LZW compression format.
 /// This struct keeps state in between `decode_next` calls so that you can call
 /// it with contiguous subparts of the compressed data as you read them.
@@ -19,17 +21,17 @@ impl LzwDecoder {
     }
 
     /// Decode the next block of compressed data.
-    pub fn decode_next(&mut self, buf: &[u8]) -> Vec<u8> {
+    pub fn decode_next(&mut self, buf: &[u8]) -> Result<Vec<u8>> {
         let mut decoded_buf: Vec<u8> = vec![];
         let mut current_offset = 0;
         loop {
             let curr_code_size = self.dict.get_curr_code_size();
             match self
                 .bit_reader
-                .get_next_code(&buf[current_offset..], curr_code_size)
+                .get_next_code(&buf[current_offset..], curr_code_size)?
             {
                 (_, None) => {
-                    return decoded_buf;
+                    return Ok(decoded_buf);
                 }
                 (consumed, Some(code)) => {
                     current_offset += consumed;
@@ -38,18 +40,13 @@ impl LzwDecoder {
                             self.dict.clear();
                             self.current_val = vec![];
                         }
-                        DictionaryValue::Stop => return decoded_buf,
+                        DictionaryValue::Stop => return Ok(decoded_buf),
                         DictionaryValue::None => {
-                            eprintln!("Error: Impossible to decode, found unknown code: {}", code);
-                            std::process::exit(1);
+                            return Err(GifParsingError::InvalidLzwCode(code));
                         }
                         DictionaryValue::Repeat => {
                             if self.current_val.is_empty() {
-                                eprintln!(
-                                    "Error: Impossible to decode, found unknown code: {}",
-                                    code
-                                );
-                                std::process::exit(1);
+                                return Err(GifParsingError::InvalidLzwState);
                             }
                             let first_val = self.current_val[0];
                             self.current_val.push(first_val);
@@ -198,11 +195,9 @@ impl LsbReader {
     /// Returns both the number or bytes read from the buffer and the read u16
     /// value.
     /// Warning: `code_size` cannot be superior to 16.
-    fn get_next_code(&mut self, mut buf: &[u8], code_size: u8) -> (usize, Option<u16>) {
+    fn get_next_code(&mut self, mut buf: &[u8], code_size: u8) -> Result<(usize, Option<u16>)> {
         if code_size > 16 {
-            // This is a logic error the program should have prevented this
-            // Ideally we would used bounded a integer value instead of u8
-            panic!("Cannot read more than 16 bits")
+            return Err(GifParsingError::InvalidCodeSize(code_size));
         }
         let mut consumed = 0;
         while self.bits < code_size {
@@ -211,7 +206,7 @@ impl LsbReader {
                 buf = &buf[1..];
                 byte
             } else {
-                return (consumed, None);
+                return Ok((consumed, None));
             };
             // Adds to perhaps previously-parsed bits
             self.acc |= (byte as u32) << self.bits;
@@ -226,6 +221,6 @@ impl LsbReader {
         self.acc >>= code_size;
         self.bits -= code_size;
 
-        (consumed, Some(res as u16))
+        Ok((consumed, Some(res as u16)))
     }
 }

@@ -2,6 +2,7 @@ use crate::color::{self, Rgb};
 use crate::decoder::LzwDecoder;
 use crate::error::{GifParsingError, Result};
 use crate::gif_reader::{GifRead, GifReaderStringError};
+use crate::{DecodedFrame, DecodedGif};
 
 /// GIF block ID for the "Image Descriptor".
 const IMAGE_DESCRIPTOR_BLOCK_ID: u8 = 0x2C;
@@ -27,26 +28,11 @@ const PLAIN_TEXT_EXTENSION_LABEL: u8 = 0x01;
 /// Background color used when none is defined.
 const DEFAULT_BACKGROUND_COLOR: u32 = 0xFFFF_FFFF;
 
-pub(crate) enum GifEvent {
-    Frame {
-        data: Vec<u32>,
-        duration: Option<u16>,
-    },
-
-    LoopingInfo(Option<u16>),
-
-    FrameEnd,
-}
-
-pub fn decode(
-    rdr: &mut impl GifRead,
-    header: &GifHeader,
-    tx: std::sync::mpsc::Sender<GifEvent>,
-) -> Result<()> {
+pub fn decode(rdr: &mut impl GifRead, header: GifHeader) -> Result<DecodedGif> {
     let (background_color, global_color_table) = if let Some(gct) = &header.global_color_table {
         let index = header.background_color_index as usize;
         if gct.len() <= index {
-            // TODO log "Invalid background color index" warning?
+            // Invalid background color index: keep decoding without a background override.
             (None, Some(gct.as_slice()))
         } else {
             (Some(gct[index]), Some(gct.as_slice()))
@@ -55,34 +41,22 @@ pub fn decode(
         (None, None)
     };
 
-    // Last graphic extension encountered. Will be needed when an Image Descriptor
-    // is encountered.
+    let mut frames = Vec::new();
     let mut last_graphic_ext: Option<GraphicControlExtension> = None;
-
-    // Background for the next frame encountered. Its content depends on the
-    // "disposal method" of the next frame encountered.
     let mut next_frame_base_buffer: Option<Vec<u32>> = None;
-
-    let mut found_loop_attribute = false;
+    let mut loop_count = None;
 
     loop {
         match rdr.read_u8()? {
             IMAGE_DESCRIPTOR_BLOCK_ID => {
-                let (delay, transparent_color_index) = match &last_graphic_ext {
-                    Some(e) => {
-                        if e.delay == 0 {
-                            (None, e.transparent_color_index)
-                        } else {
-                            (Some(e.delay), e.transparent_color_index)
-                        }
-                    }
+                let (delay_cs, transparent_color_index) = match &last_graphic_ext {
+                    Some(e) if e.delay == 0 => (None, e.transparent_color_index),
+                    Some(e) => (Some(e.delay), e.transparent_color_index),
                     None => (None, None),
                 };
 
-                // The "RestoreToPrevious" disposal method forces us to keep the current base
-                // buffer for the frame coming after that one.
                 use DisposalMethod::*;
-                let cloned_image_background = match last_graphic_ext {
+                let restored_background = match last_graphic_ext {
                     Some(GraphicControlExtension {
                         disposal_method: RestoreToPrevious,
                         ..
@@ -90,7 +64,7 @@ pub fn decode(
                     _ => None,
                 };
 
-                let block = construct_next_frame(
+                let frame_buffer = construct_next_frame(
                     rdr,
                     &global_color_table,
                     next_frame_base_buffer,
@@ -100,8 +74,6 @@ pub fn decode(
                     transparent_color_index,
                 )?;
 
-                // Obtain the base buffer for the next frame according to the current disposal
-                // method
                 next_frame_base_buffer = match last_graphic_ext {
                     Some(GraphicControlExtension {
                         disposal_method: DoNotDispose,
@@ -110,84 +82,48 @@ pub fn decode(
                     | Some(GraphicControlExtension {
                         disposal_method: NoDisposalSpecified,
                         ..
-                    }) => Some(block.clone()),
+                    }) => Some(frame_buffer.clone()),
                     Some(GraphicControlExtension {
                         disposal_method: RestoreToPrevious,
                         ..
-                    }) => cloned_image_background,
+                    }) => restored_background,
                     _ => None,
                 };
-                tx.send(GifEvent::Frame {
-                    data: block,
-                    duration: delay,
-                })
-                .unwrap_or_else(|err| {
-                    eprintln!(
-                        "Error: Impossible to communicate a new decoded frame: {}",
-                        err
-                    );
-                    std::process::exit(1);
+
+                frames.push(DecodedFrame {
+                    delay_cs,
+                    pixels_rgba: rgba_bytes_from_native_pixels(&frame_buffer),
                 });
             }
             TRAILER_BLOCK_ID => {
-                if !found_loop_attribute {
-                    tx.send(GifEvent::LoopingInfo(None)).unwrap_or_else(|err| {
-                        eprintln!(
-                            "Error: Impossible to communicate absence of looping information: {}",
-                            err
-                        );
-                        std::process::exit(1);
-                    });
-                }
-                tx.send(GifEvent::FrameEnd).unwrap_or_else(|err| {
-                    eprintln!(
-                        "Error: Impossible to communicate the end of decoded frames: {}",
-                        err
-                    );
-                    std::process::exit(1);
+                return Ok(DecodedGif {
+                    width: header.width,
+                    height: header.height,
+                    loop_count,
+                    frames,
                 });
-                break;
             }
-            EXTENSION_INTRODUCER_ID => {
-                match rdr.read_u8()? {
-                    GRAPHIC_CONTROL_EXTENSION_LABEL => {
-                        last_graphic_ext = Some(parse_graphic_control_extension(rdr)?);
-                    }
-                    APPLICATION_EXTENSION_LABEL => {
-                        let extension = parse_application_extension(rdr)?;
-
-                        // Only NETSCAPE2.0 is parsed for now as looping is an essential feature
-                        // (And I just don't want to set it to infinite by default)
-                        if let ApplicationExtension::NetscapeLooping(x) = extension {
-                            found_loop_attribute = true;
-                            tx.send(GifEvent::LoopingInfo(Some(x)))
-                                .unwrap_or_else(|err| {
-                                    eprintln!(
-                                        "Error: Impossible to communicate looping information: {}",
-                                        err
-                                    );
-                                    std::process::exit(1);
-                                });
-                        }
-                    }
-                    COMMENT_EXTENSION_LABEL => {
-                        // We don't care about comments
-                        skip_sub_blocks(rdr)?;
-                        if rdr.read_u8()? != 0x00
-                        /* block terminator */
-                        {
-                            panic!("TOTO");
-                            // error::fail_on_expected_block_terminator(Some("Comment"));
-                        }
-                    }
-                    PLAIN_TEXT_EXTENSION_LABEL => {
-                        skip_plain_text_extension(rdr)?;
-                    }
-                    x => {
-                        return Err(GifParsingError::UnrecognizedExtension(x));
+            EXTENSION_INTRODUCER_ID => match rdr.read_u8()? {
+                GRAPHIC_CONTROL_EXTENSION_LABEL => {
+                    last_graphic_ext = Some(parse_graphic_control_extension(rdr)?);
+                }
+                APPLICATION_EXTENSION_LABEL => {
+                    if let ApplicationExtension::NetscapeLooping(count) =
+                        parse_application_extension(rdr)?
+                    {
+                        loop_count = Some(count);
                     }
                 }
-            }
+                COMMENT_EXTENSION_LABEL => {
+                    skip_sub_blocks(rdr)?;
+                }
+                PLAIN_TEXT_EXTENSION_LABEL => {
+                    skip_plain_text_extension(rdr)?;
+                }
+                x => {
+                    return Err(GifParsingError::UnrecognizedExtension(x));
+                }
+            },
             x => {
                 return Err(GifParsingError::UnrecognizedBlock {
                     code: x,
@@ -196,13 +132,20 @@ pub fn decode(
             }
         }
     }
-    Ok(())
+}
+
+fn rgba_bytes_from_native_pixels(data: &[u32]) -> Vec<u8> {
+    let mut rgba = Vec::with_capacity(data.len() * std::mem::size_of::<u32>());
+    for pixel in data {
+        rgba.extend_from_slice(&pixel.to_ne_bytes());
+    }
+    rgba
 }
 
 enum ApplicationExtension {
     /// Looping value from the NETSCAPE2.0 extension.
-    /// 0 means infinite looping, any other value would be the number of time
-    /// the GIF image needs to be looped (played back from the beginning).
+    /// 0 means infinite looping, any other value would be the number of times
+    /// the GIF image should be replayed from the beginning.
     NetscapeLooping(u16),
     NotKnown,
 }
@@ -223,7 +166,6 @@ fn skip_sub_blocks(rdr: &mut impl GifRead) -> Result<()> {
 /// The plain text extention is a 89a GIF extension allowing to render text in a
 /// GIF image. This feature seems to be very rarely used, we can safely ignore
 /// it for now.
-/// TODO?
 fn skip_plain_text_extension(rdr: &mut impl GifRead) -> Result<()> {
     let block_size = rdr.read_u8()?;
     if block_size != 12 {
@@ -233,7 +175,7 @@ fn skip_plain_text_extension(rdr: &mut impl GifRead) -> Result<()> {
             got: block_size,
         });
     }
-    rdr.skip_bytes(12)?; // Skip whole plain text header
+    rdr.skip_bytes(12)?;
     skip_sub_blocks(rdr)?;
     Ok(())
 }
@@ -260,80 +202,50 @@ fn parse_application_extension(rdr: &mut impl GifRead) -> Result<ApplicationExte
 
     let mut ext = ApplicationExtension::NotKnown;
 
-    if app_name == Some("NETSCAPE".to_owned()) && app_auth_code == (50, 46, 48) && data_len >= 3 {
-        let cur_offset;
+    if app_name == Some("NETSCAPE".to_owned()) && app_auth_code == (50, 46, 48) && data_len == 3 {
         let sub_block_id = rdr.read_u8()?;
-        if data_len != 0x03 || sub_block_id != 0x01 {
-            cur_offset = 1; // Not a valid NETSCAPE2.0 Looping extension, ignore
-        } else {
+        if sub_block_id == 0x01 {
             let loop_count = rdr.read_u16()?;
             ext = ApplicationExtension::NetscapeLooping(loop_count);
-            cur_offset = 3;
+        } else {
+            rdr.skip_bytes(data_len - 1)?;
         }
-        data_len -= cur_offset;
+    } else {
+        rdr.skip_bytes(data_len)?;
     }
 
-    // Skip all remaining data blocks
     loop {
+        data_len = rdr.read_u8()? as usize;
         if data_len == 0 {
             break;
         }
-        rdr.skip_bytes(data_len - 1)?;
-        data_len = rdr.read_u8()? as usize;
+        rdr.skip_bytes(data_len)?;
     }
-    if rdr.read_u8()? != 0x00
-    /* block terminator */
-    {
-        return Err(GifParsingError::ExpectedBlockTerminator {
-            block_name: Some("ApplicationExtension Extension".to_owned()),
-        });
-    }
+
     Ok(ext)
 }
 
 /// The available value for the `disposal_method` parsed from a graphic control
 /// extension.
-#[derive(Debug)]
+#[derive(Clone, Copy, Debug)]
 enum DisposalMethod {
     /// The decoder is not required to take any action.
     NoDisposalSpecified,
-
     /// The graphic is to be left in place.
     DoNotDispose,
-
     /// The area used by the graphic must be restored to the background color.
     RestoreToBackgroundColor,
-
     /// The decoder is required to restore the area overwritten by the graphic
     /// with what was there prior to rendering the graphic.
     RestoreToPrevious,
 }
 
 /// Value of a parsed Graphic Control Extension from a GIF buffer
-#[derive(Debug)]
+#[derive(Clone, Copy, Debug)]
 struct GraphicControlExtension {
-    /// Indicates the way in which the graphic is to be treated after being
-    /// displayed.
     disposal_method: DisposalMethod,
-
-    /// If set to `true`, processing will continue when user input is entered.
-    /// The nature of the User input is determined by the application (Carriage
-    /// Return, Mouse Button Click, etc.).
-    /// When a Delay Time is used and the User Input Flag is set, processing
-    /// will continue when user input is received or when the delay time
-    /// expires, whichever occurs first.
     _user_input: bool,
-
-    /// The Transparency Index is such that when encountered, the corresponding
-    /// pixel of the display device is not modified and processing goes on to
-    /// the next pixel. The index is present if and only if the Transparency
-    /// Flag is set to 1.
     transparent_color_index: Option<u8>,
-
-    /// If not 0, this field specifies the number of hundredths (1/100) of a
-    /// second to wait before continuing with the processing of the Data Stream.
-    /// The clock starts ticking immediately after the graphic is rendered. This
-    /// field may be used in conjunction with the User Input Flag field.
     delay: u16,
 }
 
@@ -392,15 +304,9 @@ fn construct_next_frame(
     let field = rdr.read_u8()?;
 
     let has_local_color_table = field & 0x80 != 0;
-
     let has_interlacing = field & 0x40 != 0;
-    let _is_sorted = field & 0x20 != 0;
-    let _reserved_1 = field & 0x10;
-    let _reserved_2 = field & 0x08;
     let nb_color_entries: usize = 1 << ((field & 0x07) + 1);
 
-    // Current interlacing cycle - from 0 to 3 - and step used to obtain the next line
-    // we should draw. Both are only needed when interlacing is enabled.
     let (mut interlacing_cycle, mut line_step) = if has_interlacing { (0, 8) } else { (0, 1) };
 
     let lct = if has_local_color_table {
@@ -442,61 +348,58 @@ fn construct_next_frame(
     let max_pos_height = curr_block_height as usize + curr_block_top as usize - 1;
     loop {
         let sub_block_size = rdr.read_u8()? as usize;
-        if sub_block_size == 0x00
-        /* block terminator */
-        {
+        if sub_block_size == 0x00 {
             return Ok(global_buffer);
-        } else {
-            let sub_block_data = rdr.read_bytes(sub_block_size)?;
-            let decoded_data = decoder.decode_next(&sub_block_data);
-            for elt in decoded_data {
-                if elt as usize >= current_color_table.len() {
-                    return Err(GifParsingError::InvalidColor);
-                }
-                let pos = (y_pos * img_width as usize) + x_pos;
-                if pos >= global_buffer.len() {
-                    return Err(GifParsingError::TooMuchPixels);
-                }
-                let pix_val: u32 = match transparent_color_index {
-                    Some(t_idx) if t_idx == elt => {
-                        // transparent color
-                        if has_background_frame {
-                            global_buffer[pos] // do not change anything
-                        } else {
-                            match background_color {
-                                Some(c) => c.into(),
-                                None => DEFAULT_BACKGROUND_COLOR,
-                            }
+        }
+
+        let sub_block_data = rdr.read_bytes(sub_block_size)?;
+        let decoded_data = decoder.decode_next(&sub_block_data)?;
+        for elt in decoded_data {
+            if elt as usize >= current_color_table.len() {
+                return Err(GifParsingError::InvalidColor);
+            }
+            let pos = (y_pos * img_width as usize) + x_pos;
+            if pos >= global_buffer.len() {
+                return Err(GifParsingError::TooMuchPixels);
+            }
+            let pix_val: u32 = match transparent_color_index {
+                Some(t_idx) if t_idx == elt => {
+                    if has_background_frame {
+                        global_buffer[pos]
+                    } else {
+                        match background_color {
+                            Some(c) => c.into(),
+                            None => DEFAULT_BACKGROUND_COLOR,
                         }
                     }
-                    _ => (&current_color_table[elt as usize]).into(),
-                };
-                global_buffer[pos] = pix_val;
-                x_pos += 1;
-                if x_pos > max_pos_width {
-                    y_pos += line_step;
-                    if y_pos > max_pos_height {
-                        if !has_interlacing || interlacing_cycle >= 3 {
-                            skip_sub_blocks(rdr)?;
-                            return Ok(global_buffer);
-                        }
-                        interlacing_cycle += 1;
-                        let (new_y_pos, new_line_step) = match interlacing_cycle {
-                            1 => (4, 8),
-                            2 => (2, 4),
-                            _ => (1, 2),
-                        };
-                        y_pos = new_y_pos;
-                        line_step = new_line_step;
-                    }
-                    x_pos = curr_block_left as usize;
                 }
+                _ => (&current_color_table[elt as usize]).into(),
+            };
+            global_buffer[pos] = pix_val;
+            x_pos += 1;
+            if x_pos > max_pos_width {
+                y_pos += line_step;
+                if y_pos > max_pos_height {
+                    if !has_interlacing || interlacing_cycle >= 3 {
+                        skip_sub_blocks(rdr)?;
+                        return Ok(global_buffer);
+                    }
+                    interlacing_cycle += 1;
+                    let (new_y_pos, new_line_step) = match interlacing_cycle {
+                        1 => (4, 8),
+                        2 => (2, 4),
+                        _ => (1, 2),
+                    };
+                    y_pos = new_y_pos;
+                    line_step = new_line_step;
+                }
+                x_pos = curr_block_left as usize;
             }
         }
     }
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct GifHeader {
     pub width: u16,
     pub height: u16,

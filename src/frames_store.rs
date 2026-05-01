@@ -1,15 +1,15 @@
 use std::time::{self, Duration, Instant};
 
-pub(crate) struct FrameChange<T> {
+pub struct FrameChange<T> {
     new_frame: Option<T>,
     delay_before_recheck: Option<Duration>,
 }
 
 impl<T> FrameChange<T> {
-    pub(crate) fn into_frame_data(self) -> Option<T> {
+    pub fn into_frame_data(self) -> Option<T> {
         self.new_frame
     }
-    pub(crate) fn delay_before_recheck(&self) -> Option<Duration> {
+    pub fn delay_before_recheck(&self) -> Option<Duration> {
         self.delay_before_recheck
     }
 }
@@ -25,7 +25,7 @@ impl<T> Default for FrameChange<T> {
 
 /// Object storing GIF frame data and metadata and indicating the current frame that
 /// should be displayed depending on which frame it last communicated and when.
-pub(crate) struct FramesStore<T> {
+pub struct FramesStore<T> {
     /// Store every frames and the corresponding delays to the next frame, if one.
     frames: Vec<(T, Option<u16>)>,
     /// Time at which the last frame change has been communicated.
@@ -47,7 +47,7 @@ pub(crate) struct FramesStore<T> {
 }
 
 impl<T> FramesStore<T> {
-    pub(crate) fn new() -> Self {
+    pub fn new() -> Self {
         Self {
             frames: vec![],
             last_frame_change_time: time::Instant::now(),
@@ -58,19 +58,19 @@ impl<T> FramesStore<T> {
         }
     }
 
-    pub(crate) fn add_frame(&mut self, frame: T, duration: Option<u16>) {
+    pub fn add_frame(&mut self, frame: T, duration: Option<u16>) {
         self.frames.push((frame, duration));
     }
 
-    pub(crate) fn set_loop_iterations(&mut self, iterations: Option<u16>) {
+    pub fn set_loop_iterations(&mut self, iterations: Option<u16>) {
         self.left_loop_iterations = iterations;
     }
 
-    pub(crate) fn end_of_frames(&mut self) {
+    pub fn end_of_frames(&mut self) {
         self.last_frame_known = true;
     }
 
-    pub(crate) fn check(&mut self) -> FrameChange<&T> {
+    pub fn check(&mut self) -> FrameChange<&T> {
         let now = time::Instant::now();
 
         if self.frames.is_empty() {
@@ -109,7 +109,8 @@ impl<T> FramesStore<T> {
 
                     return FrameChange {
                         new_frame: Some(frame),
-                        delay_before_recheck: duration.map(|d| Duration::from_millis(d as u64)),
+                        delay_before_recheck: duration
+                            .map(|d| Duration::from_millis(10 * d as u64)),
                     };
                 }
 
@@ -144,7 +145,7 @@ impl<T> FramesStore<T> {
                             self.last_frame_change_time = now;
                             let frame = &self.frames[0].0;
                             if let Some(dur) = self.curr_frame_duration {
-                                let delay_til_next = Some(Duration::from_millis(dur as u64));
+                                let delay_til_next = Some(Duration::from_millis(10 * dur as u64));
                                 FrameChange {
                                     new_frame: Some(frame),
                                     delay_before_recheck: delay_til_next,

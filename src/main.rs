@@ -1,15 +1,12 @@
-mod color;
-mod decoder;
-mod error;
-mod frames_store;
-mod gif_reader;
-mod parser;
-
 use eframe::egui;
 use egui::{ColorImage, TextureHandle, ViewportBuilder};
-use frames_store::FramesStore;
-use gif_reader::{GifRead, GifReader};
+use gif_renderer::{
+    decode_gif_with_header, frames_store::FramesStore, parse_header, DecodedGif, GifParsingError,
+    GifReader,
+};
 use std::sync::mpsc::{channel, Receiver};
+
+const WINDOW_TITLE: &str = "GIF Displayer (Esc key to exit)";
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
@@ -17,34 +14,43 @@ fn main() {
         eprintln!("Error: Missing file path in argument.");
         std::process::exit(1);
     }
-    let f = std::fs::File::open(&args[1]).unwrap_or_else(|err| {
+
+    let file = std::fs::File::open(&args[1]).unwrap_or_else(|err| {
         eprintln!("Error: Error while opening {}: {}", &args[1], err);
         std::process::exit(1);
     });
+    let mut reader = GifReader::new(std::io::BufReader::new(file));
+    let header = parse_header(&mut reader).unwrap_or_else(|err| {
+        eprintln!("Error while parsing the GIF header: {}", err);
+        std::process::exit(1);
+    });
 
-    let rdr = GifReader::new(std::io::BufReader::new(f));
-    GifRendererEframeApp::initialize(rdr).unwrap();
+    GifRendererEframeApp::initialize(reader, header).unwrap_or_else(|err| {
+        eprintln!("Error while running the native app: {}", err);
+        std::process::exit(1);
+    });
 }
-
-const WINDOW_TITLE: &str = "GIF Displayer (Esc key to exit)";
-
-use parser::GifEvent;
 
 pub(crate) struct GifRendererEframeApp {
     frames: FramesStore<ColorImage>,
     texture: Option<TextureHandle>,
-
     width: usize,
     height: usize,
-    receiver: Receiver<GifEvent>,
+    decoder_receiver: Receiver<Result<DecodedGif, GifParsingError>>,
+    decode_status: DecodeStatus,
+}
+
+enum DecodeStatus {
+    Loading,
+    Ready,
+    Error(String),
 }
 
 impl GifRendererEframeApp {
-    pub(crate) fn initialize(mut rdr: impl GifRead + Send + 'static) -> Result<(), eframe::Error> {
-        let header = parser::parse_header(&mut rdr).unwrap_or_else(|err| {
-            eprintln!("Error while parsing the GIF header: {}", err);
-            std::process::exit(1);
-        });
+    pub(crate) fn initialize(
+        mut reader: GifReader<impl std::io::Read + std::io::Seek + Send + 'static>,
+        header: gif_renderer::GifHeader,
+    ) -> Result<(), eframe::Error> {
         let viewport = ViewportBuilder::default()
             .with_title(WINDOW_TITLE)
             .with_inner_size((header.width as f32, header.height as f32));
@@ -56,23 +62,23 @@ impl GifRendererEframeApp {
             ..Default::default()
         };
 
+        let (tx, rx) = channel::<Result<DecodedGif, GifParsingError>>();
         let width = header.width as usize;
         let height = header.height as usize;
-        let (tx, rx) = channel::<GifEvent>();
+        std::thread::spawn(move || {
+            let result = decode_gif_with_header(&mut reader, header);
+            let _ = tx.send(result);
+        });
+
         let app = Self {
             frames: FramesStore::new(),
             texture: None,
             width,
             height,
-            receiver: rx,
+            decoder_receiver: rx,
+            decode_status: DecodeStatus::Loading,
         };
-        // 4 - decode GIF in another thread
-        std::thread::spawn(move || {
-            if let Err(x) = parser::decode(&mut rdr, &header, tx) {
-                eprintln!("Error while decoding: {}", x);
-                std::process::exit(1);
-            }
-        });
+
         eframe::run_native(
             WINDOW_TITLE,
             options,
@@ -88,6 +94,17 @@ impl GifRendererEframeApp {
             }),
         )
     }
+
+    fn load_decoded_gif(&mut self, decoded: DecodedGif) {
+        self.frames.set_loop_iterations(decoded.loop_count);
+        for frame in decoded.frames {
+            let img =
+                ColorImage::from_rgba_unmultiplied([self.width, self.height], &frame.pixels_rgba);
+            self.frames.add_frame(img, frame.delay_cs);
+        }
+        self.frames.end_of_frames();
+        self.decode_status = DecodeStatus::Ready;
+    }
 }
 
 impl eframe::App for GifRendererEframeApp {
@@ -101,53 +118,54 @@ impl eframe::App for GifRendererEframeApp {
             }
         });
 
-        while let Ok(event) = self.receiver.try_recv() {
-            match event {
-                GifEvent::Frame { data, duration } => {
-                    // I used [u32] initially, but egui wants [u8].
-                    // I could be transmuting and stuff for max efficiency, but I'm in the middle
-                    // of changing the gui so I'm focusing on other things here
-                    let mut data_u8 = Vec::with_capacity(data.len() * std::mem::size_of::<u32>());
-                    for num in data {
-                        data_u8.extend_from_slice(&num.to_ne_bytes()); // Slice is fine here
-                    }
-                    let img = egui::ColorImage::from_rgba_unmultiplied(
-                        [self.width, self.height],
-                        &data_u8,
-                    );
-                    self.frames.add_frame(img, duration);
+        if let Ok(result) = self.decoder_receiver.try_recv() {
+            match result {
+                Ok(decoded) => self.load_decoded_gif(decoded),
+                Err(err) => {
+                    self.decode_status = DecodeStatus::Error(err.to_string());
                 }
-                GifEvent::LoopingInfo(looping_info) => {
-                    self.frames.set_loop_iterations(looping_info)
-                }
-                GifEvent::FrameEnd => self.frames.end_of_frames(),
             }
         }
 
-        let frame_change = self.frames.check();
-        if let Some(delay) = frame_change.delay_before_recheck() {
-            ctx.request_repaint_after(delay);
-        }
-        if let Some(new_frame) = frame_change.into_frame_data() {
-            self.texture = Some(ctx.load_texture("frame", new_frame.clone(), Default::default()));
+        if matches!(
+            self.decode_status,
+            DecodeStatus::Loading | DecodeStatus::Ready
+        ) {
+            let frame_change = self.frames.check();
+            if let Some(delay) = frame_change.delay_before_recheck() {
+                ctx.request_repaint_after(delay);
+            }
+            if let Some(new_frame) = frame_change.into_frame_data() {
+                self.texture =
+                    Some(ctx.load_texture("frame", new_frame.clone(), Default::default()));
+            }
         }
 
         egui::CentralPanel::default()
-            .frame(egui::Frame::NONE) // No margins or padding
+            .frame(egui::Frame::NONE)
             .show(ctx, |ui| {
-                ui.add_space(5.0); // top padding
+                ui.add_space(5.0);
                 ui.horizontal(|ui| {
-                    ui.add_space(5.0); // left padding
+                    ui.add_space(5.0);
                     ui.label("Press ESC to exit");
                     ui.separator();
                     ui.label(format!("Size: {}x{}", self.width, self.height));
-                    // TODO: next and prev buttons?
-                    ui.add_space(5.0); // right padding
+                    ui.add_space(5.0);
                 });
-                ui.add_space(3.0); // bottom padding
+                ui.add_space(3.0);
 
-                if let Some(texture) = &self.texture {
-                    ui.image(texture);
+                match &self.decode_status {
+                    DecodeStatus::Loading if self.texture.is_none() => {
+                        ui.label("Decoding GIF...");
+                    }
+                    DecodeStatus::Error(err) => {
+                        ui.colored_label(egui::Color32::RED, err);
+                    }
+                    _ => {
+                        if let Some(texture) = &self.texture {
+                            ui.image(texture);
+                        }
+                    }
                 }
             });
     }

@@ -32,6 +32,15 @@ pub enum GifParsingError {
     /// There's too much color data in the GIF content
     TooMuchPixels,
 
+    /// An invalid LZW code was found while decoding image data.
+    InvalidLzwCode(u16),
+
+    /// The LZW stream entered an invalid state while decoding image data.
+    InvalidLzwState,
+
+    /// The decoder was asked to read an invalid code size.
+    InvalidCodeSize(u8),
+
     /// No color table was found at a given point.
     /// The specification actually allows that, at which point the GIF decoding
     /// software should either guess one or in the better case refer to the
@@ -67,6 +76,9 @@ impl error::Error for GifParsingError {
             GifParsingError::ExpectedBlockTerminator { .. } => None,
             GifParsingError::InvalidColor => None,
             GifParsingError::TooMuchPixels => None,
+            GifParsingError::InvalidLzwCode(_) => None,
+            GifParsingError::InvalidLzwState => None,
+            GifParsingError::InvalidCodeSize(_) => None,
             GifParsingError::NoColorTable => None,
             GifParsingError::UnrecognizedExtension(_) => None,
             GifParsingError::UnrecognizedBlock { .. } => None,
@@ -113,6 +125,22 @@ impl fmt::Display for GifParsingError {
             GifParsingError::InvalidColor => write!(f, "Unknown color encountered."),
 
             GifParsingError::TooMuchPixels => write!(f, "Too much color data was found."),
+
+            GifParsingError::InvalidLzwCode(code) => {
+                write!(f, "Invalid LZW code encountered: {}.", code)
+            }
+
+            GifParsingError::InvalidLzwState => {
+                write!(f, "The LZW stream entered an invalid decoding state.")
+            }
+
+            GifParsingError::InvalidCodeSize(size) => {
+                write!(
+                    f,
+                    "Cannot read LZW codes wider than 16 bits (got {}).",
+                    size
+                )
+            }
 
             GifParsingError::NoColorTable => {
                 write!(f, "No color table found for the current frame.")
