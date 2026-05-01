@@ -4,6 +4,8 @@ mod error;
 pub mod frames_store;
 mod gif_reader;
 mod parser;
+#[cfg(target_arch = "wasm32")]
+mod wasm_api;
 
 pub use error::{GifParsingError, Result};
 pub use gif_reader::{GifRead, GifReader, GifReaderStringError};

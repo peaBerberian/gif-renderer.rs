@@ -1,3 +1,5 @@
 /target
 assets/*.gif
 !assets/large.gif
+/web/node_modules/
+/web/dist/
