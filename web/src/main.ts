@@ -13,6 +13,9 @@ class GifPlayer {
   private playbackDirection: PlaybackDirection = 1;
   private playing = false;
   private timerId: number | null = null;
+  private playbackSession = 0;
+  private seeking = false;
+  private resumePlaybackAfterSeek = false;
   private readonly imageDataCache = new Map<number, ImageData>();
 
   constructor(
@@ -34,6 +37,7 @@ class GifPlayer {
   ) {}
 
   load(decodedGif: WasmDecodedGif): void {
+    this.stopPlayback();
     this.disposeCurrentGif();
     this.decodedGif = decodedGif;
     this.frameIndex = 0;
@@ -68,18 +72,11 @@ class GifPlayer {
     if (!this.decodedGif) {
       return;
     }
-    this.playing = !this.playing;
-    this.buttons.playButton.dataset.state = this.playing ? 'pause' : 'play';
-    this.buttons.playButton.setAttribute(
-      'aria-label',
-      this.playing ? 'Pause playback' : 'Play playback',
-    );
-    this.buttons.playButton.title = this.playing ? 'Pause playback' : 'Play playback';
     if (this.playing) {
-      this.scheduleNextTick();
-    } else {
-      this.clearTimer();
+      this.stopPlayback();
+      return;
     }
+    this.resumePlayback();
   }
 
   setDirection(direction: PlaybackDirection): void {
@@ -97,11 +94,7 @@ class GifPlayer {
     if (!this.decodedGif) {
       return;
     }
-    this.clearTimer();
-    this.playing = false;
-    this.buttons.playButton.dataset.state = 'play';
-    this.buttons.playButton.setAttribute('aria-label', 'Play playback');
-    this.buttons.playButton.title = 'Play playback';
+    this.stopPlayback();
     this.frameIndex = this.wrapFrameIndex(this.frameIndex + step);
     this.renderFrame(this.frameIndex);
   }
@@ -112,6 +105,29 @@ class GifPlayer {
     }
     this.frameIndex = Math.max(0, Math.min(frameIndex, this.decodedGif.frameCount - 1));
     this.renderFrame(this.frameIndex);
+  }
+
+  beginSeekInteraction(): void {
+    if (this.seeking) {
+      return;
+    }
+    this.seeking = true;
+    this.resumePlaybackAfterSeek = this.playing;
+    if (this.playing) {
+      this.pausePlayback();
+    }
+  }
+
+  endSeekInteraction(): void {
+    if (!this.seeking) {
+      return;
+    }
+    this.seeking = false;
+    const shouldResume = this.resumePlaybackAfterSeek;
+    this.resumePlaybackAfterSeek = false;
+    if (shouldResume) {
+      this.resumePlayback();
+    }
   }
 
   exportCurrentFrame(): void {
@@ -143,10 +159,11 @@ class GifPlayer {
     if (!this.decodedGif || !this.playing) {
       return;
     }
+    const playbackSession = this.playbackSession;
     const delayMs = this.decodedGif.getFrameDelayMs(this.frameIndex) ?? 100;
     this.timerId = window.setTimeout(
       () => {
-        if (!this.decodedGif) {
+        if (!this.decodedGif || !this.playing || playbackSession !== this.playbackSession) {
           return;
         }
         this.frameIndex = this.wrapFrameIndex(this.frameIndex + this.playbackDirection);
@@ -207,6 +224,39 @@ class GifPlayer {
     }
   }
 
+  private stopPlayback(): void {
+    this.resumePlaybackAfterSeek = false;
+    this.pausePlayback();
+    this.syncPlayButton();
+  }
+
+  private pausePlayback(): void {
+    this.playing = false;
+    this.playbackSession += 1;
+    this.clearTimer();
+    this.syncPlayButton();
+  }
+
+  private resumePlayback(): void {
+    if (!this.decodedGif) {
+      return;
+    }
+    this.playing = true;
+    this.playbackSession += 1;
+    this.syncPlayButton();
+    this.scheduleNextTick();
+  }
+
+  private syncPlayButton(): void {
+    const effectivelyPlaying = this.playing || (this.seeking && this.resumePlaybackAfterSeek);
+    this.buttons.playButton.dataset.state = effectivelyPlaying ? 'pause' : 'play';
+    this.buttons.playButton.setAttribute(
+      'aria-label',
+      effectivelyPlaying ? 'Pause playback' : 'Play playback',
+    );
+    this.buttons.playButton.title = effectivelyPlaying ? 'Pause playback' : 'Play playback';
+  }
+
   private disposeCurrentGif(): void {
     if (this.decodedGif) {
       this.decodedGif.destroy();
@@ -243,6 +293,22 @@ function updateThemeButton(button: HTMLButtonElement, theme: Theme): void {
   button.title = `Switch to ${nextTheme} theme`;
 }
 
+function isSeekKeyboardEvent(event: KeyboardEvent): boolean {
+  switch (event.key) {
+    case 'ArrowLeft':
+    case 'ArrowRight':
+    case 'ArrowUp':
+    case 'ArrowDown':
+    case 'Home':
+    case 'End':
+    case 'PageUp':
+    case 'PageDown':
+      return true;
+    default:
+      return false;
+  }
+}
+
 async function loadGithubStars(target: HTMLElement): Promise<void> {
   try {
     const response = await fetch('https://api.github.com/repos/peaberberian/gif-renderer.rs');
@@ -268,6 +334,27 @@ async function main(): Promise<void> {
   root.append(shell.root);
   updateThemeButton(shell.themeButton, getActiveTheme());
   void loadGithubStars(shell.githubStars);
+  let keyboardSeekEndTimerId: number | null = null;
+
+  const clearKeyboardSeekEndTimer = () => {
+    if (keyboardSeekEndTimerId !== null) {
+      window.clearTimeout(keyboardSeekEndTimerId);
+      keyboardSeekEndTimerId = null;
+    }
+  };
+
+  const scheduleKeyboardSeekEnd = () => {
+    clearKeyboardSeekEndTimer();
+    keyboardSeekEndTimerId = window.setTimeout(() => {
+      keyboardSeekEndTimerId = null;
+      player.endSeekInteraction();
+    }, 200);
+  };
+
+  const finishSeekInteraction = () => {
+    clearKeyboardSeekEndTimer();
+    player.endSeekInteraction();
+  };
 
   const wasm = await GifWasmModule.load('./pkg/gif_renderer.wasm');
   const player = new GifPlayer(
@@ -376,11 +463,57 @@ async function main(): Promise<void> {
     player.exportCurrentFrame();
   });
 
+  shell.seekInput.addEventListener('pointerdown', () => {
+    player.beginSeekInteraction();
+  });
+
   shell.seekInput.addEventListener('input', () => {
     player.seek(Number(shell.seekInput.value));
   });
 
+  shell.seekInput.addEventListener('keydown', (event) => {
+    if (!isSeekKeyboardEvent(event)) {
+      return;
+    }
+    player.beginSeekInteraction();
+    scheduleKeyboardSeekEnd();
+  });
+
+  shell.seekInput.addEventListener('keyup', (event) => {
+    if (!isSeekKeyboardEvent(event)) {
+      return;
+    }
+    finishSeekInteraction();
+  });
+
+  shell.seekInput.addEventListener('pointerup', () => {
+    finishSeekInteraction();
+  });
+
+  shell.seekInput.addEventListener('pointercancel', () => {
+    finishSeekInteraction();
+  });
+
+  shell.seekInput.addEventListener('change', () => {
+    finishSeekInteraction();
+  });
+
+  shell.seekInput.addEventListener('blur', () => {
+    finishSeekInteraction();
+  });
+
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') {
+      finishSeekInteraction();
+    }
+  });
+
+  window.addEventListener('blur', () => {
+    finishSeekInteraction();
+  });
+
   window.addEventListener('beforeunload', () => {
+    clearKeyboardSeekEndTimer();
     player.dispose();
   });
 
